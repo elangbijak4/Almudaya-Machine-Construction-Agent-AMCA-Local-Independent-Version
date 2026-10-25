@@ -1,39 +1,30 @@
-# AMCA User Tutorial
+# AMCA User Tutorial (Tutorial Praktik Langkah-demi-Langkah & Skenario Verifikasi — Versi Lokal Mandiri)
 
-Tutorial ini mengeksekusi graph referensi end-to-end melalui GUI dan CLI. Jalur lokal contoh tidak memakai API key. Tutorial kedua menunjukkan cara meminta YAML AI dan merevisinya.
+**Versi Dokumen:** `0.2.0` · **Bahasa:** Indonesia  
+**Peran Dokumen:** Panduan *hands-on* langkah demi langkah dari tingkat dasar hingga tingkat lanjut (9Router/Combo Fallback, Hardware Gate, Subworker HITL, 3-Stage Formal Verification, dan Handover ZIP), sekaligus skenario uji terima (*Acceptance Test Scenarios*) saat verifikasi aplikasi Versi Lokal Mandiri.
 
-## A. Tutorial GUI: contoh → verifikasi → run
+---
 
-1. Pasang dependensi dan jalankan UI:
+## Persiapan Awal Lingkungan (Windows PowerShell)
 
-   ```powershell
-   py -3.12 -m venv .venv
-   $Python = ".\.venv\Scripts\python.exe"
-   if (-not (Test-Path $Python)) { throw "Virtual environment not found. Run: py -3.12 -m venv .venv" }
-   & $Python -m pip install -r requirements-app.txt
-   $env:PYTHONPATH = "src"
-   & $Python -m streamlit run app.py
-   ```
-
-2. Buka [http://localhost:8501](http://localhost:8501).
-3. Pada dropdown contoh pilih `valid_parallel_analysis`, lalu klik **Muat contoh ke editor**.
-4. Klik **Validasi YAML saat ini**. Periksa status `VERIFIED`, lalu tinjau graf DAG.
-5. Pertahankan contoh input `{"text":"AMCA builds a graph."}` atau masukkan JSON object lain.
-6. Pilih **Saya menyetujui eksekusi mesin ini**, lalu klik **Jalankan mesin**.
-7. Periksa execution record. Untuk contoh bawaan, ringkasan memuat `characters=20; words=4`.
-8. Di bagian artefak, unduh file JSON/YAML/DOT. Sesi dan run lokal berada di `artifacts/`.
-
-## B. Tutorial CLI: eksekusi yang sama
-
-Jalankan dari PowerShell root proyek:
+Buka Windows PowerShell di direktori akar repositori (`d:\AMCA_Waterfall_Scaffold_v0.2`):
 
 ```powershell
 py -3.12 -m venv .venv
 $PY = ".\.venv\Scripts\python.exe"
 if (-not (Test-Path $PY)) { throw "Virtual environment not found. Run: py -3.12 -m venv .venv" }
-& $PY -m pip install -r requirements-dev.txt
+& $PY -m pip install -r requirements-app.txt
 $env:PYTHONPATH = "src"
+```
 
+---
+
+## Tutorial 1: Alur Dasar Lokal (`schema_version: "1.0"`) Tanpa API Key
+
+Tutorial pertama ini memastikan kompatibilitas mundur (`P0`–`P6`) tetap berjalan sempurna tanpa memerlukan koneksi internet atau API Key.
+
+### A. Melalui CLI
+```powershell
 & $PY -m amca_agent.cli examples
 & $PY -m amca_agent.cli example valid_parallel_analysis --output machine.yaml
 & $PY -m amca_agent.cli validate machine.yaml
@@ -41,61 +32,134 @@ $env:PYTHONPATH = "src"
 & $PY -m amca.cli run machine.yaml --inputs examples/reference-input.json --output execution-record.json
 & $PY -m amca.cli report execution-record.json
 ```
+- **Hasil yang Wajib Terverifikasi**:
+  - `validate` menghasilkan status `VERIFIED` (exit code `0`).
+  - `report` menampilkan status `SUCCEEDED` dengan ringkasan `characters=20; words=4` untuk input `{"text": "AMCA builds a graph."}`.
 
-CLI inti `run` langsung menjalankan setelah verifikasi lolos; gunakan hanya jika Anda memang bermaksud menjalankan file dan input yang diberikan. Workflow agent interaktif dengan konfirmasi eksplisit:
+### B. Melalui GUI (`app.py`)
+1. Jalankan `& $PY -m streamlit run app.py` dan buka `http://localhost:8501`.
+2. Pilih contoh `valid_parallel_analysis` $\to$ klik **Muat contoh ke editor** $\to$ klik **Validasi YAML saat ini**.
+3. Pastikan status `VERIFIED` dan graf DAG tampil di layar.
+4. Centang **Saya menyetujui eksekusi mesin ini** $\to$ klik **Jalankan mesin** $\to$ pastikan output memuat `characters=20; words=4`.
 
+---
+
+## Tutorial 2: Inspeksi Spesifikasi Laptop (`hardware.py`) & Koneksi ke Ollama / LM Studio / OpenCode
+
+Tutorial ini memverifikasi bahwa AMCA memeriksa spesifikasi perangkat keras laptop secara nyata sebelum mengizinkan unduhan model lokal, serta dapat mendeteksi model di **Ollama**, **LM Studio**, dan **OpenCode**.
+
+### Langkah 1 — Menguji Inspeksi Perangkat Keras Laptop
+Jalankan perintah inspeksi perangkat keras:
 ```powershell
-& $PY -m amca_agent.cli chat --example valid_parallel_analysis
+& $PY -m amca_agent.cli hardware-check
 ```
+- **Hasil yang Wajib Terverifikasi**:
+  - Menampilkan data nyata dari OS laptop Anda: `ram_total_mb`, `ram_available_mb`, `disk_free_mb`, `cpu_logical_cores`, `cpu_arch`, dan `gpu_detected`.
+  - Menampilkan daftar kelayakan katalog model lokal:
+    - Model yang kebutuhannya di bawah RAM/Disk bebas laptop Anda berstatus **`ELIGIBLE`**.
+    - Model raksasa yang melebihi kapasitas RAM/Disk laptop Anda berstatus **`REFUSED_INSUFFICIENT_HARDWARE`** dan tombol/perintah unduhannya **diblokir secara otomatis**.
 
-Di prompt, ketik `show`, `validate`, `graph`, lalu `run examples/reference-input.json`. Pastikan file dan graph benar; ketika diminta persetujuan ketik `RUN`. Output harus menyertakan `characters=20; words=4`. Gunakan `versions` untuk riwayat, `restore 1` untuk memulihkan versi pertama, dan `load machine.yaml` untuk menerima edit dari editor teks. `quit` menyimpan sesi.
-
-## C. Tutorial AI: membuat dan merevisi YAML
-
-AI memerlukan akun/key provider dan koneksi internet. Prompt, chat terbaru, dan YAML saat ini dikirim kepada provider pilihan.
-
-1. Di GUI pilih Gemini, Grok, atau OpenAI, isi model dan API key di sidebar.
-2. Tulis problem statement berisi tujuan, input yang tersedia, langkah analisis, dan bentuk output yang diinginkan.
-3. Klik **Buat YAML dengan agent**. Baca YAML hasil model dan status validasi.
-4. Ketik perubahan spesifik ke chat, misalnya “Gunakan teks input `review_text` dan jangan ubah perhitungan.” Revisi menghasilkan versi berikutnya.
-5. Periksa kembali YAML, status dan graph; jika invalid, arahkan revisi atau edit YAML manual.
-6. Jalankan hanya setelah status verified dan review manusia. AI tidak mengeksekusi kodenya sendiri; runtime tetap memilih implementasi dari allowlist.
-
-Padanan CLI:
-
+### Langkah 2 — Memindai Model Lokal dari Ollama, LM Studio, atau OpenCode
+Jika Anda menjalankan Ollama (`:11434`), LM Studio (`:1234`), atau OpenCode (`:4096` / CLI):
 ```powershell
-& $PY -m amca_agent.cli chat --provider Gemini --example valid_parallel_analysis
+& $PY -m amca_agent.cli discover-models --provider ollama
+& $PY -m amca_agent.cli discover-models --provider lm_studio
+& $PY -m amca_agent.cli discover-models --provider opencode
 ```
+- **Hasil yang Wajib Terverifikasi**:
+  - AMCA menampilkan daftar model yang terpasang pada masing-masing runtime lokal tersebut dan mengizinkan Anda memilihnya sebagai otak Agent Utama maupun Subworker.
 
-CLI meminta problem statement jika belum tersedia, lalu meminta API key secara tersembunyi. Pada sesi interaktif, kirim `revisi Buat machine_id menjadi text_review_v2` dan lanjutkan siklus. Gunakan `sessions` untuk melihat sesi dan `chat --session <id>` untuk melanjutkan.
+---
 
-## D. Tutorial penolakan graph invalid
+## Tutorial 3: Menghubungkan **9Router** & Meracik **Rantai Fallback Combo (`amca_combo`)** untuk Mengatasi Limit Token
 
-Jalankan validator pada contoh yang sengaja salah:
+Tutorial ini mempraktikkan cara menghubungkan AMCA ke **9Router** (termasuk **Combo 9Router**) serta menyusun **Rantai Fallback Combo Native AMCA** agar sesi konstruksi tidak gagal saat sebuah model mencapai batas token (*token limit*) atau kuota habis (`HTTP 429`).
 
-```powershell
-& $PY -m amca_agent.cli validate examples/invalid_missing_dependency.yaml
-```
+### Skenario A — Menggunakan Model atau Combo dari 9Router
+1. Pastikan 9Router berjalan di `http://127.0.0.1:20128`.
+2. Pindai daftar model dan Combo yang ada di 9Router:
+   ```powershell
+   & $PY -m amca_agent.cli discover-models --provider nine_router --base-url http://127.0.0.1:20128/v1
+   ```
+3. Mulai sesi konstruksi menggunakan alias Combo 9Router (misalnya `premium-coding` atau `free-combo`):
+   ```powershell
+   & $PY -m amca_agent.cli chat --provider nine_router --model premium-coding
+   ```
 
-Hasil nonzero dan diagnostik menunjukkan masalah struktur/verifikasi. Jangan jalankan YAML yang ditolak. Perbaiki dependency melalui editor atau minta AI revisi, simpan YAML baru, lalu validasi lagi.
+### Skenario B — Menyusun Rantai Fallback Combo Native di AMCA (`Tier 1 -> Tier 2 -> Tier 3`)
+1. Pada GUI (`app.py`), buka panel **Preliminary Harness & Combo Setup** $\to$ pilih tab **Combo & Fallback Chain Builder** (atau jalankan `& $PY -m amca_agent.cli combo-config`).
+2. Buat Combo bernama `riset-tahan-limit` dengan urutan:
+   - **Tier 1**: `gemini` (`gemini-2.5-pro`)
+   - **Tier 2**: `nine_router` (`free-combo`)
+   - **Tier 3**: `ollama` (`qwen2.5-coder:7b`)
+   - **Tier 4**: `offline_deterministic` (`builtin-v1`)
+3. Simpan dan aktifkan `riset-tahan-limit` sebagai otak Agent Utama AMCA.
+4. **Hasil yang Wajib Terverifikasi saat Terjadi Limit Token**:
+   - Ketika Tier 1 mencapai batas token (`token_limit_exceeded` / `context_length_exceeded` / respons terpotong `finish_reason == "length"`) atau kuota habis (`HTTP 429`), AMCA:
+     1. Mengompaksi konteks percakapan (tetap menyimpan YAML revisi terakhir dan *counterexample* formal),
+     2. Mencatat `FallbackTransitionEvent` (`from_tier: 1 -> to_tier: 2`, `trigger_reason: "token_limit_exceeded"`),
+     3. Melanjutkan pembuatan YAML secara otomatis melalui Tier 2 tanpa kehilangan sesi.
 
-## E. Menjelajahi bukti
+---
 
-```powershell
-& $PY -m amca_agent.cli sessions
-& $PY -m amca_agent.cli artifacts
-```
+## Tutorial 4: Merancang Sistem Mesin (`amca/v1alpha1`) & Memperbaiki *Counterexample* Verifikasi Formal Stage 1–2
 
-Untuk run dari chat, cari `run_id` pada daftar artifacts, lalu:
+Tutorial ini mendemonstrasikan mengapa verifikasi struktural biasa tidak cukup bagi peneliti, dan bagaimana **Stage 1 Formal Verifier (`formal_verifier.py`)** menangkap cacat logika komposisi.
 
-```powershell
-& $PY -m amca_agent.cli artifacts --show <run_id>
-& $PY -m amca_agent.cli show artifacts/runs/<run_id>/verification-report.json
-& $PY -m amca_agent.cli show artifacts/runs/<run_id>/execution-record.json
-```
+1. Mulai sesi interaktif:
+   ```powershell
+   & $PY -m amca_agent.cli chat
+   ```
+2. Ketika muncul pertanyaan ***“Mesin/agent apakah yang Anda ingin buat?”***, masukkan permintaan:
+   > *"Buat sistem analisis teks yang menerima teks masukan, memvalidasi agar tidak kosong, menghitung karakter dan kata, merangkum hasil, dan membuat laporan."*
+3. Di dalam prompt `amca>`, jalankan:
+   ```text
+   amca> validate
+   amca> proof
+   ```
+4. **Simulasi Cacat Logika Komposisi (Uji Negatif Formal)**:
+   - Misalkan pada draf YAML, koneksi dari `input` (`text.input`) langsung dihubungkan ke `analysis_a` (`text.char_count`) dengan melewati `validate` (`text.validate`).
+   - Pemeriksaan tipe port biasa melihat `string -> string` (cocok), **TETAPI** perintah `proof` akan melaporkan:
+     - **Status Stage 1**: `REFUTED` pada kewajiban **`FO-HOA-01` (*Hoare Pre/Postcondition Entailment*)**.
+     - **Counterexample**: Pascakondisi `text.input` hanya menjamin `non_empty_raw`, sedangkan prasyarat `text.char_count` mewajibkan `non_empty_trimmed` (contoh penyangkal: input `"   "`).
+5. Minta agen memperbaiki berdasarkan *counterexample* tersebut:
+   ```text
+   amca> revisi Hubungkan output text dari input ke validate terlebih dahulu sebelum masuk ke analysis_a dan analysis_b
+   amca> validate
+   amca> proof
+   ```
+6. Pastikan kini seluruh pemeriksaan Stage 1 (`FO-TOP-01`, `FO-CON-01`, `FO-HOA-01`, `FO-GOAL-01`, `FO-SEC-01`) dan Stage 2 berstatus **`PROVED`**.
+7. Kunci spesifikasi dengan **Approval A**:
+   ```text
+   amca> approve-spec
+   ```
+   Ketik `APPROVE_SPEC` saat diminta konfirmasi.
 
-Gunakan `dot -Tpng machine-dag.dot -o machine-dag.png` bila program Graphviz tersedia. Artefak disimpan lokal dan chat dapat mencakup prompt/data input, jadi jangan membagikannya tanpa meninjau isinya.
+---
 
-## Hasil dan batas tutorial
+## Tutorial 5: *On-The-Fly Subworker HITL*, Approval B, Konstruksi Proyek, Bukti Stage 3 ($G_{\text{code}} \cong G_{\text{yaml}}$), & Handover ZIP
 
-Tutorial ini membuktikan penggunaan implementasi lokal dengan YAML contoh yang sudah ada. Bagian generasi AI hanya dapat diuji ketika pengguna menyediakan credential provider; contoh ini tidak membuktikan kualitas sintesis atau kebenaran semantik semua graph. Graph cabang/join menunjukkan bentuk DAG nonlinier, tetapi runtime masih mengeksekusi tiap node secara berurutan.
+Melanjutkan dari Tutorial 4 setelah `approve-spec` berhasil:
+
+1. Tampilkan rencana konstruksi dan picu evaluasi Subworker:
+   ```text
+   amca> plan
+   ```
+2. **Merespons Prompt *On-The-Fly Subworker HITL***:
+   - Ketika AMCA mengusulkan pembuatan Subworker (mis. `subworker-formal-auditor-01` untuk mengaudit pengujian tepi), antarmuka **On-The-Fly HITL** akan muncul meminta persetujuan Anda.
+   - Pilih **`APPROVED`**, lalu masukkan konfigurasi model/API key yang **berbeda** dari Agent Utama (misalnya mengarahkan Subworker ke model lokal di **Ollama/LM Studio**, ke **Combo 9Router**, atau memasukkan API Key provider lain). *(Jika Anda memilih `DECLINED`, AMCA akan tetap lanjut menggunakan Agent Utama saja).*
+3. Kunci rencana konstruksi dengan **Approval B**:
+   ```text
+   amca> approve-construction
+   ```
+   Ketik `APPROVE_CONSTRUCTION` saat diminta konfirmasi.
+4. Bangun proyek Python mandiri dan jalankan verifikasi lengkap:
+   ```text
+   amca> construct
+   ```
+5. **Hasil yang Wajib Terverifikasi**:
+   - Proyek Python lengkap terbuat di `artifacts/constructed_projects/<machine_id>-rev<NNN>/`.
+   - **Stage 3 Formal Verification (`FO-REF-01` & `FO-REF-02`)** mem-parsing AST file Python yang dihasilkan dan membuktikan **`PROVED`** bahwa $G_{\text{code}} \cong G_{\text{yaml}}$ serta setiap komponen memiliki *runtime contract guard*.
+   - Suite `unittest` milik proyek yang dihasilkan dieksekusi secara nyata dan lulus 100%.
+   - Arsip **`<machine_id>-rev<NNN>-handover.zip`** berhasil dibuat, berisi kode sumber, test, `machine.yaml`, `formal-proof-certificate.json`, `machine-dag.dot`, `README.md`, dan `construction-log.jsonl` (tanpa satu pun API key di dalamnya).
+

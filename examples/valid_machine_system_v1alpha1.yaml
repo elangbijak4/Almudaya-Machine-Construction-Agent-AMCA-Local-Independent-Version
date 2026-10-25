@@ -1,0 +1,177 @@
+apiVersion: amca/v1alpha1
+kind: MachineSystem
+metadata:
+  id: reference-text-analysis
+  name: Reference Text Analysis System
+  revision: 1
+  lifecycle: verified
+intent:
+  request: >-
+    Terima teks masukan, validasi agar tidak kosong, hitung jumlah karakter
+    dan kata secara terpisah, gabungkan ringkasannya, lalu hasilkan laporan.
+  acceptanceCriteria:
+    - id: AC-SYS-1
+      statement: Teks kosong atau hanya spasi ditolak sebelum analisis.
+      formalGoal: non_empty_trimmed
+    - id: AC-SYS-2
+      statement: Teks valid menghasilkan ringkasan jumlah karakter dan kata serta objek laporan.
+      formalGoal: report_contains_summary
+machines:
+  - id: input
+    name: Input Reader
+    role: Read raw text from runtime JSON payload.
+    implementation:
+      language: python
+      component: text.input
+      version: "1"
+      config:
+        input_key: text
+    inputs: []
+    outputs:
+      - name: text
+        type: string
+    services: []
+  - id: validate
+    name: Text Validator
+    role: Ensure text is non-empty and normalized.
+    implementation:
+      language: python
+      component: text.validate
+      version: "1"
+      config: {}
+    inputs:
+      - name: text
+        type: string
+        required: true
+    outputs:
+      - name: text
+        type: string
+    services: []
+  - id: analysis_a
+    name: Character Analyzer
+    role: Count characters in validated text.
+    implementation:
+      language: python
+      component: text.char_count
+      version: "1"
+      config: {}
+    inputs:
+      - name: text
+        type: string
+        required: true
+    outputs:
+      - name: finding
+        type: object
+    services: []
+  - id: analysis_b
+    name: Word Analyzer
+    role: Count words in validated text.
+    implementation:
+      language: python
+      component: text.word_count
+      version: "1"
+      config: {}
+    inputs:
+      - name: text
+        type: string
+        required: true
+    outputs:
+      - name: finding
+        type: object
+    services: []
+  - id: aggregate
+    name: Findings Summarizer
+    role: Combine character and word counts into summary string.
+    implementation:
+      language: python
+      component: text.summarize
+      version: "1"
+      config: {}
+    inputs:
+      - name: finding_a
+        type: object
+        required: true
+      - name: finding_b
+        type: object
+        required: true
+    outputs:
+      - name: summary
+        type: string
+    services: []
+  - id: report
+    name: Report Assembler
+    role: Package summary string into report object.
+    implementation:
+      language: python
+      component: report.assemble
+      version: "1"
+      config: {}
+    inputs:
+      - name: summary
+        type: string
+        required: true
+    outputs:
+      - name: report
+        type: object
+    services: []
+connections:
+  - from:
+      machine: input
+      output: text
+    to:
+      machine: validate
+      input: text
+  - from:
+      machine: validate
+      output: text
+    to:
+      machine: analysis_a
+      input: text
+  - from:
+      machine: validate
+      output: text
+    to:
+      machine: analysis_b
+      input: text
+  - from:
+      machine: analysis_a
+      output: finding
+    to:
+      machine: aggregate
+      input: finding_a
+  - from:
+      machine: analysis_b
+      output: finding
+    to:
+      machine: aggregate
+      input: finding_b
+  - from:
+      machine: aggregate
+      output: summary
+    to:
+      machine: report
+      input: summary
+environment:
+  builderEnvironment:
+    os: Windows
+    python: ">=3.12,<3.13"
+  targetEnvironment:
+    os: any
+    python: ">=3.12,<3.13"
+securityPolicy:
+  networkPolicy: deny-by-default
+  operatingSystemCommands: deny
+  secretPolicy: references-only
+construction:
+  sdlc:
+    method: waterfall
+  languages:
+    - python
+  workerPlan:
+    policy: minimize-cost
+    useSubagents: false
+assumptions:
+  - Input JSON runtime selalu berupa objek pemetaan dengan kunci string 'text'.
+limitations:
+  - Eksekusi cabang analysis_a dan analysis_b dilakukan secara sekuensial deterministik.
+unresolvedQuestions: []

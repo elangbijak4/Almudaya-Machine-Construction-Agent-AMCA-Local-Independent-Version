@@ -1,0 +1,232 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://almudaya.local/schemas/machine-system-v1alpha1.schema.yaml"
+title: "AMCA MachineSystem Specification (amca/v1alpha1)"
+type: object
+additionalProperties: false
+required:
+  - apiVersion
+  - kind
+  - metadata
+  - intent
+  - machines
+  - connections
+  - environment
+  - securityPolicy
+  - construction
+  - assumptions
+  - limitations
+  - unresolvedQuestions
+properties:
+  apiVersion:
+    const: "amca/v1alpha1"
+  kind:
+    const: "MachineSystem"
+  metadata:
+    type: object
+    additionalProperties: false
+    required: [id, name, revision, lifecycle]
+    properties:
+      id:
+        type: string
+        pattern: "^[a-z][a-z0-9_-]{0,63}$"
+      name:
+        type: string
+        minLength: 1
+        maxLength: 128
+      revision:
+        type: integer
+        minimum: 1
+      lifecycle:
+        type: string
+        enum: [draft, verified, approved, constructed]
+  intent:
+    type: object
+    additionalProperties: false
+    required: [request, acceptanceCriteria]
+    properties:
+      request:
+        type: string
+        minLength: 1
+        maxLength: 8000
+      acceptanceCriteria:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, statement, formalGoal]
+          properties:
+            id:
+              type: string
+              minLength: 1
+            statement:
+              type: string
+              minLength: 1
+            formalGoal:
+              type: string
+              minLength: 1
+  machines:
+    type: array
+    minItems: 1
+    maxItems: 64
+    items:
+      type: object
+      additionalProperties: false
+      required: [id, name, role, implementation, inputs, outputs, services]
+      properties:
+        id:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,63}$"
+        name:
+          type: string
+          minLength: 1
+        role:
+          type: string
+          minLength: 1
+        implementation:
+          type: object
+          additionalProperties: false
+          required: [language, component, version, config]
+          properties:
+            language:
+              const: "python"
+            component:
+              type: string
+              enum:
+                - input_source
+                - validate_text
+                - analysis_a
+                - analysis_b
+                - aggregate_results
+                - generate_report
+                - text.input
+                - text.validate
+                - text.char_count
+                - text.word_count
+                - text.summarize
+                - report.assemble
+            version:
+              const: "1"
+            config:
+              type: object
+        inputs:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, type, required]
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+                enum: [string, object]
+              required:
+                type: boolean
+        outputs:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, type]
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+                enum: [string, object]
+        services:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, kind, secretRef]
+            properties:
+              name:
+                type: string
+              kind:
+                type: string
+              secretRef:
+                type: string
+                pattern: "^[A-Z][A-Z0-9_]{1,63}$"
+  connections:
+    type: array
+    maxItems: 128
+    items:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from:
+          type: object
+          additionalProperties: false
+          required: [machine, output]
+          properties:
+            machine:
+              type: string
+            output:
+              type: string
+        to:
+          type: object
+          additionalProperties: false
+          required: [machine, input]
+          properties:
+            machine:
+              type: string
+            input:
+              type: string
+  environment:
+    type: object
+    additionalProperties: false
+    required: [builderEnvironment, targetEnvironment]
+    properties:
+      builderEnvironment:
+        type: object
+      targetEnvironment:
+        type: object
+  securityPolicy:
+    type: object
+    additionalProperties: false
+    required: [networkPolicy, operatingSystemCommands, secretPolicy]
+    properties:
+      networkPolicy:
+        const: "deny-by-default"
+      operatingSystemCommands:
+        const: "deny"
+      secretPolicy:
+        const: "references-only"
+  construction:
+    type: object
+    additionalProperties: false
+    required: [sdlc, languages, workerPlan]
+    properties:
+      sdlc:
+        type: object
+        required: [method]
+        properties:
+          method:
+            const: "waterfall"
+      languages:
+        type: array
+        items:
+          const: "python"
+      workerPlan:
+        type: object
+        required: [policy, useSubagents]
+        properties:
+          policy:
+            type: string
+          useSubagents:
+            type: boolean
+  assumptions:
+    type: array
+    items:
+      type: string
+  limitations:
+    type: array
+    items:
+      type: string
+  unresolvedQuestions:
+    type: array
+    items:
+      type: string

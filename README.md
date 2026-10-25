@@ -190,12 +190,22 @@ Detailed Indonesian manuals are in [`help/`](help/): [User Manual](help/USER-MAN
 
 ## Project status and evidence
 
-The original local CLI PoC completed P0–P6 approval and handover. The optional AI authoring/web interface is a later scope extension (CR-001): the reference YAML has been manually validated and executed through the UI, but the extension awaits its own P4 review and post-change P5/P6 regression review. In particular, a live model generation call has not yet been verified because no provider key was supplied. Do not interpret baseline CLI test results as extension test results.
+The repository implements **AMCA Local Independent Version (`v0.2.0`)**, including the baseline deterministic DAG verifier/runtime (`P0`–`P6`), the web/CLI authoring interface (`CR-001`), and the refactored **Specialized Agent Harness, 3-Stage Compositional Formal Verifier, and Bounded Project Constructor (`CR-002`)**:
 
+- **12-Provider Specialized Agent Harness (`src/amca_agent/harness.py` & `provider.py`)**: Supports hot-swappable Cloud API keys (`Gemini`, `xAI (Grok)`, `OpenAI`, `Anthropic`, `Custom OpenAI-Compatible`), **`9Router` (`http://127.0.0.1:20128/v1` including 9Router Combos)**, local AI runtimes (**`Ollama`**, **`LM Studio`**, **`OpenCode`**), hardware-gated **`Local Model`** downloads (`src/amca_agent/hardware.py`), **`AMCA Combo`** token-limit fallback chains (`Tier 1 -> Tier 2 -> ... -> Tier N`), and **`Offline Deterministic`** synthesis.
+- **On-The-Fly Subworker HITL**: Prompts human approval and dedicated API key/model binding whenever a Subworker is proposed.
+- **3-Stage Compositional Formal Verification (`src/amca_agent/formal_verifier.py`)**: Proves Stage 1 spec obligations (`FO-TOP-01` reachability, `FO-CON-01` Church-Rosser confluence, `FO-HOA-01` Hoare pre/postcondition entailment, `FO-GOAL-01` goal entailment, `FO-SEC-01` secret taint non-interference), Stage 2 revision invariant preservation (`FO-EVO-01`), and Stage 3 post-construction Python `ast.parse()` graph isomorphism ($G_{\text{code}} \cong G_{\text{yaml}}$, `FO-REF-01` & `FO-REF-02`).
+- **Bounded Project Builder & Handover ZIP (`src/amca_agent/builder.py` & `packager.py`)**: Generates a standalone runnable Python project in `artifacts/constructed_projects/<machine_id>-rev<NNN>/`, runs bytecode compilation and generated unit tests, and packages `<machine_id>-rev<NNN>-handover.zip`.
+
+Key documentation and verification evidence:
 - [P6 baseline evaluation and handover](docs/10-release-and-evaluation.md)
 - [CR-001 agent/web extension review and evidence](docs/11-agent-web-extension-review.md)
+- [CR-002 agent constructor requirements](docs/12-agent-constructor-requirements.md)
+- [CR-002 agent constructor architecture](docs/13-agent-constructor-architecture.md)
+- [CR-002 verification and handover report](docs/14-agent-constructor-verification-and-handover.md)
 - [Requirements-to-test traceability](docs/traceability-matrix.md)
 - [Workflow and approval records](workflow/gate-records.yaml)
+- [User Manual](help/USER_MANUAL.md) · [User Guide](help/USER_GUIDE.md) · [User Tutorial](help/USER_TUTORIAL.md)
 
 The white paper's research questions and proposed experiments remain a research agenda. See Sections 8–12 of the manuscript for proposed metrics, experiments, and unresolved formalization questions. The white paper states that the general framework is preliminary and does not claim an experimentally validated system; this implementation likewise makes only the bounded claims supported by its code and evidence.
 

@@ -1,7 +1,9 @@
 # Requirements Traceability Matrix
 
-**Status:** P5 verification mapping and evidence completed; owner approval pending.  
-**Requirement baseline:** [docs/01-requirements-specification.md](01-requirements-specification.md)
+**Status:** P5/P6 baseline and CR-001/CR-002 constructor, harness, and 3-stage formal verification mapping completed.  
+**Requirement baselines:** [docs/01-requirements-specification.md](01-requirements-specification.md), [docs/11-agent-web-extension-review.md](11-agent-web-extension-review.md), and [docs/12-agent-constructor-requirements.md](12-agent-constructor-requirements.md)
+
+## 1. Core Baseline Requirements (`FR-01`–`FR-10`, `NFR-01`–`NFR-08`)
 
 | Requirement | Design | Implemented source | Current test/evidence | Status |
 |---|---|---|---|---|
@@ -24,5 +26,19 @@
 | NFR-07 | `docs/02-system-architecture.md`, `docs/06-implementation-plan.md` | `requirements-dev.txt`; `src/amca/*.py` | dependency/source review; `docs/evidence/p5-static-and-reproducibility.txt` | Clean-environment dependency and full-suite checks passed; no external services used |
 | NFR-08 | `docs/04-verification-design.md`, `docs/05-runtime-and-execution-design.md` | `src/amca/errors.py`, `src/amca/cli.py`, `src/amca/reporting.py` | `tests/e2e/test_cli_reference.py`; `tests/unit/test_reporting.py` | Implemented; P5 full suite passed (68/68; see docs/evidence/p5-unittest-rerun.txt) |
 
-P5 verification evidence is in `docs/09-verification-report.md` and `docs/evidence/`. The final acceptance and release handover review remains P6 work.
+## 2. CR-001 & CR-002 Extension Requirements (`CR-UI-01`–`CR-UI-09`, `AC-01`–`AC-23`)
 
+| Requirement | Design | Implemented source | Current test/evidence | Status |
+|---|---|---|---|---|
+| CR-UI-01..09 | `docs/11-agent-web-extension-review.md` | `app.py`, `src/amca_agent/provider.py`, `src/amca_agent/graph.py`, `src/amca_agent/artifacts.py`, `src/amca_agent/cli.py` | `tests/unit/test_agent_provider.py`, `tests/integration/test_agent_cli.py`, `tests/integration/test_streamlit_app.py` | Implemented and verified |
+| AC-01, AC-02 | `docs/13-agent-constructor-architecture.md` | `src/amca_agent/intent.py`, `src/amca_agent/cli.py`, `app.py` | `tests/unit/test_intent_and_approvals.py`, `tests/integration/test_conversation_and_spec_approval.py` | Implemented and verified |
+| AC-03, AC-05, AC-07 | `docs/13-agent-constructor-architecture.md`, `schemas/machine-system-v1alpha1.schema.yaml` | `src/amca_agent/system_spec.py` | `tests/unit/test_system_spec.py` | Implemented and verified |
+| AC-04, AC-16 | `docs/13-agent-constructor-architecture.md` | `src/amca_agent/provider.py`, `src/amca_agent/artifacts.py`, `src/amca_agent/cli.py`, `app.py` | `tests/integration/test_conversation_and_spec_approval.py`, `tests/integration/test_streamlit_app.py` | Implemented and verified |
+| AC-06, AC-09 | `docs/13-agent-constructor-architecture.md` | `src/amca_agent/approvals.py`, `src/amca_agent/planner.py` | `tests/unit/test_intent_and_approvals.py` | Implemented and verified |
+| AC-08, AC-10..14 | `docs/13-agent-constructor-architecture.md` | `src/amca_agent/builder.py`, `src/amca_agent/packager.py` | `tests/integration/test_builder_scaffold.py`, `tests/integration/test_construction_and_zip.py` | Implemented and verified |
+| AC-15, AC-18 | `docs/13-agent-constructor-architecture.md` | `src/amca/*`, `src/amca_agent/*` | Full test suite + AST/mutation checks in `tests/unit/test_formal_verifier.py` | Implemented and verified |
+| AC-17 | `docs/13-agent-constructor-architecture.md`, `schemas/formal-proof-certificate.schema.yaml` | `src/amca_agent/formal_verifier.py` | `tests/unit/test_formal_verifier.py`, `tests/integration/test_construction_and_zip.py` | Implemented and verified |
+| AC-19, AC-20, AC-21, AC-22 | `docs/13-agent-constructor-architecture.md` | `src/amca_agent/hardware.py`, `src/amca_agent/harness.py`, `src/amca_agent/provider.py` | `tests/unit/test_hardware_and_harness.py` | Implemented and verified |
+| AC-23 | `docs/14-agent-constructor-verification-and-handover.md` | `help/USER_MANUAL.md`, `help/USER_GUIDE.md`, `help/USER_TUTORIAL.md` | `tests/integration/test_construction_and_zip.py`, `docs/14-agent-constructor-verification-and-handover.md` | Implemented and verified |
+
+P5 verification evidence is in `docs/09-verification-report.md` and `docs/evidence/`. CR-002 verification and handover evidence is in `docs/14-agent-constructor-verification-and-handover.md`.
