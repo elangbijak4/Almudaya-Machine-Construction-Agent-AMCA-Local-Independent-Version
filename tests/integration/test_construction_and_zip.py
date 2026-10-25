@@ -206,6 +206,41 @@ class ConstructionAndZipTests(unittest.TestCase):
             self.assertEqual(res["stage3_status"], "PROVED")
             self.assertTrue(Path(res["zip_path"]).is_file())
 
+    def test_single_linear_and_nonlinear_machine_code_and_zip_generation(self) -> None:
+        topologies = [
+            ("single_machine", ROOT / "examples" / "valid_single_machine.yaml", {"text": "AMCA builds a graph."}),
+            ("linear_pipeline", ROOT / "examples" / "valid_linear_pipeline.yaml", {"finding": "characters=20"}),
+            ("nonlinear_dag", ROOT / "examples" / "valid_parallel_analysis.yaml", {"report": {"summary": "characters=20; words=4"}}),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "projects"
+            for expected_topo, spec_path, expected_output in topologies:
+                with self.subTest(topology=expected_topo):
+                    out_json = Path(tmp) / f"{expected_topo}.json"
+                    buf = io.StringIO()
+                    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                        code = cli.main(
+                            [
+                                "construct",
+                                str(spec_path),
+                                "--approve-spec",
+                                "--approve-construction",
+                                "--output-dir",
+                                str(out_dir),
+                                "--output",
+                                str(out_json),
+                            ]
+                        )
+                    self.assertEqual(code, 0, buf.getvalue())
+                    res = json.loads(out_json.read_text(encoding="utf-8"))
+                    self.assertEqual(res["overall_formal_status"], "PROVED")
+                    self.assertEqual(res["stage3_status"], "PROVED")
+                    self.assertTrue(res["compile_passed"])
+                    self.assertTrue(res["unit_tests_passed"])
+                    self.assertTrue(res["sample_execution_passed"])
+                    self.assertEqual(res["verification_report"]["sample_final_output"], expected_output)
+                    self.assertTrue(Path(res["zip_path"]).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

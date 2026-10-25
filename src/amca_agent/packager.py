@@ -16,7 +16,7 @@ import zipfile
 from amca.models import CandidateGraph
 
 from .approvals import ConstructionApprovalRecord, SpecApprovalRecord
-from .builder import ConstructedProjectLayout
+from .builder import ConstructedProjectLayout, classify_topology, expected_reference_final_output
 from .formal_verifier import FormalProofCertificate, verify_code_refinement
 from .harness import AgentHarnessSession
 from .planner import ConstructionPlan
@@ -188,13 +188,11 @@ def verify_and_package_project(
     )
     sample_ok = cli_proc.returncode == 0
     sample_output_json: dict[str, Any] = {}
+    expected_final = expected_reference_final_output(candidate)
     if sample_ok:
         try:
             sample_output_json = json.loads(cli_proc.stdout)
-            sample_ok = (
-                sample_output_json.get("final_output", {}).get("report", {}).get("summary")
-                == "characters=20; words=4"
-            )
+            sample_ok = sample_output_json.get("final_output") == expected_final
         except Exception:
             sample_ok = False
 

@@ -1,0 +1,16 @@
+schema_version: "1.0"
+machine_id: "linear-char-pipeline"
+nodes:
+  - id: "input"
+    component: "input_source"
+    config:
+      input_key: "text"
+  - id: "validate"
+    component: "validate_text"
+    config: {}
+  - id: "analysis_a"
+    component: "analysis_a"
+    config: {}
+edges:
+  - {from: "input", out: "text", to: "validate", in: "text"}
+  - {from: "validate", out: "text", to: "analysis_a", in: "text"}

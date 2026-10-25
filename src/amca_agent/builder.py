@@ -61,6 +61,36 @@ def _detect_input_key(candidate: CandidateGraph) -> str:
     return "text"
 
 
+def classify_topology(candidate: CandidateGraph) -> str:
+    """Classify the candidate graph into 'single_machine', 'linear_pipeline', or 'nonlinear_dag'."""
+    if len(candidate.nodes) == 1 and len(candidate.edges) == 0:
+        return "single_machine"
+    out_deg: dict[str, int] = {n.id: 0 for n in candidate.nodes}
+    in_deg: dict[str, int] = {n.id: 0 for n in candidate.nodes}
+    for edge in candidate.edges:
+        out_deg[edge.source] = out_deg.get(edge.source, 0) + 1
+        in_deg[edge.target] = in_deg.get(edge.target, 0) + 1
+    if max(out_deg.values(), default=0) <= 1 and max(in_deg.values(), default=0) <= 1:
+        return "linear_pipeline"
+    return "nonlinear_dag"
+
+
+def expected_reference_final_output(candidate: CandidateGraph) -> dict[str, Any]:
+    """Compute the deterministic expected final_output of the sink node for reference input 'AMCA builds a graph.'."""
+    order = _topological_sort(candidate) or [n.id for n in candidate.nodes]
+    node_map = {n.id: n for n in candidate.nodes}
+    sink_comp = node_map[order[-1]].component
+    ref_map: dict[str, dict[str, Any]] = {
+        "input_source": {"text": "AMCA builds a graph."},
+        "validate_text": {"text": "AMCA builds a graph."},
+        "analysis_a": {"finding": "characters=20"},
+        "analysis_b": {"finding": "words=4"},
+        "aggregate_results": {"summary": "characters=20; words=4"},
+        "generate_report": {"report": {"summary": "characters=20; words=4"}},
+    }
+    return ref_map.get(sink_comp, {"text": "AMCA builds a graph."})
+
+
 def _render_components_py() -> str:
     return '''"""Deterministic bounded components with runtime Hoare precondition/postcondition guards."""
 from __future__ import annotations
@@ -179,6 +209,7 @@ COMPONENT_DISPATCH = {
 
 def _render_pipeline_py(candidate: CandidateGraph) -> str:
     order = _topological_sort(candidate) or [n.id for n in candidate.nodes]
+    topology_class = classify_topology(candidate)
     node_map = {n.id: n for n in candidate.nodes}
     incoming_by_target: dict[str, list[Any]] = {n.id: [] for n in candidate.nodes}
     for edge in sorted(candidate.edges, key=lambda e: (e.target, e.input, e.source, e.output)):
@@ -193,6 +224,7 @@ def _render_pipeline_py(candidate: CandidateGraph) -> str:
         "from .components import COMPONENT_DISPATCH",
         "",
         f"MACHINE_ID = {candidate.machine_id!r}",
+        f"TOPOLOGY_CLASS = {topology_class!r}",
         f"SPECIFICATION_SHA256 = {candidate.specification_sha256!r}",
         f"CANDIDATE_SHA256 = {candidate.candidate_sha256!r}",
         f"TOPOLOGICAL_ORDER = {list(order)!r}",
@@ -301,6 +333,9 @@ if __name__ == "__main__":
 
 
 def _render_tests_py(candidate: CandidateGraph, input_key: str) -> str:
+    expected_out = expected_reference_final_output(candidate)
+    has_validation_or_analysis = any(n.component != "input_source" for n in candidate.nodes)
+    invalid_payload_expr = f"{{{input_key!r}: '   '}}" if has_validation_or_analysis else "{}"
     return f'''"""Automated unit & contract verification suite for constructed machine {candidate.machine_id!r}."""
 from __future__ import annotations
 
@@ -314,19 +349,20 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from constructed_machine.components import ContractViolationError
-from constructed_machine.pipeline import MACHINE_ID, TOPOLOGICAL_ORDER, run_machine
+from constructed_machine.pipeline import MACHINE_ID, TOPOLOGICAL_ORDER, TOPOLOGY_CLASS, run_machine
 
 
 class ConstructedMachineTests(unittest.TestCase):
-    def test_reference_input_produces_deterministic_report(self) -> None:
+    def test_reference_input_produces_deterministic_output(self) -> None:
         result = run_machine({{{input_key!r}: "AMCA builds a graph."}})
         self.assertEqual(result["machine_id"], {candidate.machine_id!r})
-        self.assertEqual(result["final_output"], {{"report": {{"summary": "characters=20; words=4"}}}})
+        self.assertEqual(result["final_output"], {expected_out!r})
         self.assertEqual(result["execution_order"], TOPOLOGICAL_ORDER)
+        self.assertIn(TOPOLOGY_CLASS, ("single_machine", "linear_pipeline", "nonlinear_dag"))
 
-    def test_empty_or_whitespace_input_rejected_by_hoare_guard(self) -> None:
+    def test_invalid_input_rejected_by_hoare_guard(self) -> None:
         with self.assertRaises(ContractViolationError):
-            run_machine({{{input_key!r}: "   "}})
+            run_machine({invalid_payload_expr})
 
 
 if __name__ == "__main__":
