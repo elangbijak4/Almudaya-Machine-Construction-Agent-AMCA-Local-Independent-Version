@@ -64,9 +64,18 @@ Untuk mencegah pekerjaan terhenti ketika sebuah model kehabisan kuota atau menca
 
 ---
 
-## 3. Langkah 1 & 2: Merancang Mesin & Menjalankan Verifikasi Formal (Stage 1 & 2)
+## 3. Langkah 1 & 2: Katalog Komponen Terdaftar, Batasan Prompt, Pembuatan Komponen Baru, & Verifikasi Formal (Stage 1 & 2)
 
-1. **Sambutan & Klasifikasi Cakupan**:
+1. **Sajian Katalog Komponen Terdaftar & Panduan Batasan Prompt (Bagian 1 GUI / Perintah `components` CLI)**:
+   - Sebelum memasukkan prompt, AMCA menyajikan **Katalog Komponen Terdaftar** yang mencantumkan seluruh komponen yang diizinkan (6 komponen inti bawaan + seluruh komponen kustom yang Anda daftarkan), lengkap dengan port masuk (`in`), port keluar (`out`), kunci konfigurasi (`config_keys`), dan **Kontrak Hoare ($P_c \rightarrow Q_c$)**.
+   - **Batasan Prompt (*Prompt Boundaries*)**:
+     - YAML hanya dapat merangkai komponen yang terdaftar pada katalog tersebut.
+     - Keluaran `input_source` (`text`) wajib divalidasi oleh `validate_text` (atau komponen transformasi kustom yang menjamin `non_empty_trimmed`) sebelum masuk ke komponen analisis (`FO-HOA-01`).
+     - Prompt dapat meminta **Mesin Tunggal (`single_machine`)**, **Pipeline Linier (`linear_pipeline`)**, maupun **Graf Nonlinier / DAG Paralel (`nonlinear_dag`)**.
+2. **Pembuatan & Pendaftaran Komponen Baru (*Custom Component Studio* — Bagian 8 GUI / `register-component` CLI)**:
+   - Jika Anda membutuhkan kemampuan pemrosesan baru di luar 6 komponen bawaan (misalnya penghitung kalimat `sentence_counter`, pencari kata kunci `keyword_counter`, atau normalisasi huruf `uppercase_normalizer`), buka **Bagian 8 · Pembuat & Pendaftar Komponen Baru** di GUI (atau jalankan `& $PY -m amca_agent.cli register-component --id sentence_counter --role "Menghitung jumlah kalimat dari teks tervalidasi"`).
+   - Komponen baru akan divalidasi, dilengkapi kontrak Hoare dan generator kode AST Stage 3, disimpan di `artifacts/custom_components/custom_registry.json`, dan langsung tampil pada **Katalog Komponen Terdaftar** sehingga siap dipanggil dari prompt Anda!
+3. **Sambutan & Klasifikasi Cakupan**:
    - Aplikasi menyapa Anda dengan: ***“Mesin/agent apakah yang Anda ingin buat?”***
    - Jelaskan mesin/agen yang ingin Anda bangun dalam bahasa alami. Contoh:
      > *"Saya ingin membuat sistem mesin analisis teks yang menerima teks masukan, memvalidasi agar teks tidak kosong, menghitung jumlah karakter dan kata secara terpisah, menggabungkan ringkasannya, lalu menghasilkan laporan."*

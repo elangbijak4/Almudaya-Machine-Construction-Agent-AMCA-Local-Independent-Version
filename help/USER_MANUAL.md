@@ -197,6 +197,10 @@ $env:PYTHONPATH = "src"
   - `& $PY -m amca_agent.cli hardware-check [--model <model_id>]` — Menjalankan inspeksi RAM, Disk, CPU, dan GPU laptop serta mengevaluasi kelayakan model lokal (`ELIGIBLE` / `REFUSED_INSUFFICIENT_HARDWARE`).
   - `& $PY -m amca_agent.cli discover-models --provider <nine_router|ollama|lm_studio|opencode> [--base-url <url>]` — Memindai model atau Combo yang tersedia di 9Router, Ollama, LM Studio, atau OpenCode.
   - `& $PY -m amca_agent.cli combo-config` — Menyusun rantai fallback Combo Native AMCA (`Tier 1 -> Tier 2 -> ... -> Tier N`).
+- **Katalog Komponen Terdaftar, Batasan Prompt, & Pendaftaran Komponen Baru**:
+  - `& $PY -m amca_agent.cli components [--json] [--output <path>]` — Menampilkan **Katalog Komponen Terdaftar & Panduan Batasan Prompt** (mencakup 6 komponen inti bawaan + seluruh komponen kustom yang telah didaftarkan beserta port masuk/keluar, kunci konfigurasi, prasyarat/pascakondisi Hoare, dan aturan batasan prompt untuk Mesin Tunggal, Pipeline Linier, maupun Graf Nonlinier).
+  - `& $PY -m amca_agent.cli register-component --id <component_id> [--alias <alias>] [--name <nama>] [--role <deskripsi>] [--template text_transform|text_metric_object|text_metric_string|dual_finding_combiner|report_packager] [--mode <mode>]` — Membuat dan mendaftarkan komponen deterministik baru ke Registry AMCA (`artifacts/custom_components/custom_registry.json`), lengkap dengan kontrak Hoare dan generator kode AST Stage 3.
+  - `& $PY -m amca_agent.cli unregister-component --id <component_id>` — Menghapus komponen kustom dari registry (6 komponen inti bawaan tidak dapat dihapus atau ditimpa).
 - **Contoh, Validasi, Verifikasi Formal, & Graf**:
   - `& $PY -m amca_agent.cli examples`
   - `& $PY -m amca_agent.cli example valid_parallel_analysis --output machine.yaml`
@@ -206,6 +210,8 @@ $env:PYTHONPATH = "src"
 - **Sesi Interaktif Pembuatan & Konstruksi Mesin (`chat`)**:
   - `& $PY -m amca_agent.cli chat [--provider <provider>] [--model <model_or_combo>] [--example <name>] [--session <id>]`
   - Perintah di dalam prompt interaktif `amca>`:
+    - `components` — Menampilkan tabel **Katalog Komponen Terdaftar & Panduan Batasan Prompt** secara langsung di dalam sesi chat.
+    - `register-component <id> <deskripsi>` — Mendraft dan mendaftarkan komponen baru secara langsung dari sesi interaktif.
     - `setup` — Membuka pengaturan *Preliminary Harness* / mengganti provider, API key, 9Router Combo, atau AMCA Combo secara *on-the-fly*.
     - `hardware` — Menampilkan status spesifikasi perangkat keras laptop saat ini.
     - `show` — Menampilkan YAML revisi aktif.

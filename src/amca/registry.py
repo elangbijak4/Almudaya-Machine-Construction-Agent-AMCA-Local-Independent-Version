@@ -29,8 +29,22 @@ class ComponentDefinition:
             value = config["input_key"]
             if type(value) is not str or not value or not _identifier(value):
                 raise SpecificationError("input_key must be a valid identifier", path=f"{path}.input_key")
-        elif set(config) != self.config_keys:
-            raise SpecificationError("This component requires an empty config object", path=path)
+        elif not self.config_keys:
+            if config:
+                raise SpecificationError("This component requires an empty config object", path=path)
+        else:
+            extra = set(config) - set(self.config_keys)
+            if extra:
+                raise SpecificationError(
+                    f"Component {self.component_id!r} does not allow config keys {sorted(extra)}",
+                    path=path,
+                )
+            for k, v in config.items():
+                if type(v) not in (str, int, float, bool):
+                    raise SpecificationError(
+                        f"Config key {k!r} must have a scalar value",
+                        path=f"{path}.{k}",
+                    )
 
 
 def _identifier(value: str) -> bool:
@@ -89,7 +103,7 @@ def _generate_report(config: dict[str, JsonValue], inputs: dict[str, JsonValue])
     return {"report": {"summary": summary}}
 
 
-_COMPONENTS = {
+BUILTIN_COMPONENTS: dict[str, ComponentDefinition] = {
     "input_source": ComponentDefinition("input_source", {}, {"text": "string"}, frozenset({"input_key"}), _input_source),
     "validate_text": ComponentDefinition("validate_text", {"text": "string"}, {"text": "string"}, EMPTY_CONFIG, _validate_text),
     "analysis_a": ComponentDefinition("analysis_a", {"text": "string"}, {"finding": "object"}, EMPTY_CONFIG, _analysis_a),
@@ -97,6 +111,43 @@ _COMPONENTS = {
     "aggregate_results": ComponentDefinition("aggregate_results", {"finding_a": "object", "finding_b": "object"}, {"summary": "string"}, EMPTY_CONFIG, _aggregate),
     "generate_report": ComponentDefinition("generate_report", {"summary": "string"}, {"report": "object"}, EMPTY_CONFIG, _generate_report),
 }
+BUILTIN_COMPONENT_IDS: tuple[str, ...] = tuple(sorted(BUILTIN_COMPONENTS))
+
+_COMPONENTS: dict[str, ComponentDefinition] = dict(BUILTIN_COMPONENTS)
+
+
+def is_builtin_component(component_id: str) -> bool:
+    return component_id in BUILTIN_COMPONENTS
+
+
+def register_component_definition(definition: ComponentDefinition) -> None:
+    if not isinstance(definition, ComponentDefinition):
+        raise SpecificationError("definition must be a ComponentDefinition", path="$.registry")
+    cid = definition.component_id
+    if type(cid) is not str or not _identifier(cid):
+        raise SpecificationError(f"Invalid component_id {cid!r}; must match [a-z][a-z0-9_-]{{0,63}}", path="$.registry.component_id")
+    if cid in BUILTIN_COMPONENTS:
+        raise SpecificationError(f"Cannot overwrite immutable built-in component {cid!r}", path="$.registry.component_id")
+    if not definition.output_ports:
+        raise SpecificationError(f"Component {cid!r} must declare at least one output port", path="$.registry.output_ports")
+    for port_map_name, port_map in (("input_ports", definition.input_ports), ("output_ports", definition.output_ports)):
+        for p_name, p_type in port_map.items():
+            if type(p_name) is not str or not _identifier(p_name):
+                raise SpecificationError(f"Invalid port name {p_name!r} in {port_map_name}", path=f"$.registry.{port_map_name}")
+            if p_type not in {"string", "object"}:
+                raise SpecificationError(f"Port {p_name!r} type must be 'string' or 'object'", path=f"$.registry.{port_map_name}.{p_name}")
+    _COMPONENTS[cid] = definition
+
+
+def unregister_custom_component_definition(component_id: str) -> None:
+    if component_id in BUILTIN_COMPONENTS:
+        raise SpecificationError(f"Cannot remove immutable built-in component {component_id!r}", path="$.registry.component_id")
+    _COMPONENTS.pop(component_id, None)
+
+
+def clear_custom_component_definitions() -> None:
+    _COMPONENTS.clear()
+    _COMPONENTS.update(BUILTIN_COMPONENTS)
 
 
 def get_component(component_id: str) -> ComponentDefinition:
@@ -108,6 +159,10 @@ def get_component(component_id: str) -> ComponentDefinition:
 
 def component_ids() -> tuple[str, ...]:
     return tuple(sorted(_COMPONENTS))
+
+
+def custom_component_ids() -> tuple[str, ...]:
+    return tuple(sorted(cid for cid in _COMPONENTS if cid not in BUILTIN_COMPONENTS))
 
 
 def registry_profile() -> str:

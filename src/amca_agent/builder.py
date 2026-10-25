@@ -19,6 +19,7 @@ from .approvals import (
     SpecApprovalRecord,
     validate_approvals_for_construction,
 )
+from .custom_components import CustomComponentSpec, get_custom_component_spec, list_custom_component_specs
 from .formal_verifier import FormalProofCertificate
 from .graph import to_dot
 from .planner import ConstructionPlan, _topological_sort
@@ -75,26 +76,123 @@ def classify_topology(candidate: CandidateGraph) -> str:
     return "nonlinear_dag"
 
 
-def expected_reference_final_output(candidate: CandidateGraph) -> dict[str, Any]:
-    """Compute the deterministic expected final_output of the sink node for reference input 'AMCA builds a graph.'."""
-    order = _topological_sort(candidate) or [n.id for n in candidate.nodes]
-    node_map = {n.id: n for n in candidate.nodes}
-    sink_comp = node_map[order[-1]].component
-    ref_map: dict[str, dict[str, Any]] = {
-        "input_source": {"text": "AMCA builds a graph."},
-        "validate_text": {"text": "AMCA builds a graph."},
-        "analysis_a": {"finding": "characters=20"},
-        "analysis_b": {"finding": "words=4"},
-        "aggregate_results": {"summary": "characters=20; words=4"},
-        "generate_report": {"report": {"summary": "characters=20; words=4"}},
-    }
-    return ref_map.get(sink_comp, {"text": "AMCA builds a graph."})
+def _render_custom_component_function(spec: CustomComponentSpec) -> tuple[str, str]:
+    """Return (func_name, func_source) for a registered custom component."""
+    safe_id = "".join(c if c.isalnum() else "_" for c in spec.component_id)
+    func_name = f"run_custom_{safe_id}"
+    cid = spec.component_id
+    in_port = next(iter(spec.input_ports.keys()), "text")
+    out_port = next(iter(spec.output_ports.keys()), "finding")
+    default_mode = str(spec.template_params.get("mode", "sentence_count"))
+    default_kw = str(spec.template_params.get("keyword", spec.default_config.get("keyword", "amca")))
+    default_prefix = str(spec.template_params.get("prefix", spec.default_config.get("prefix", "")))
+    default_suffix = str(spec.template_params.get("suffix", spec.default_config.get("suffix", "")))
+    default_tag = str(spec.template_params.get("tag", spec.default_config.get("tag", cid)))
+
+    if spec.operation_template == "text_transform":
+        body = f'''def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    _enforce_preconditions({cid!r}, inputs)
+    raw = str(inputs.get({in_port!r}, "")).strip()
+    if not raw:
+        raise ContractViolationError("{cid}: input text cannot be empty or whitespace-only")
+    mode = str(config.get("mode", {default_mode!r})).lower()
+    prefix = str(config.get("prefix", {default_prefix!r}))
+    suffix = str(config.get("suffix", {default_suffix!r}))
+    if mode == "uppercase":
+        transformed = raw.upper()
+    elif mode == "lowercase":
+        transformed = raw.lower()
+    elif mode == "titlecase":
+        transformed = raw.title()
+    elif mode == "prefix_suffix":
+        transformed = f"{{prefix}}{{raw}}{{suffix}}".strip()
+    else:
+        transformed = " ".join(raw.split())
+    outputs = {{{out_port!r}: transformed}}
+    _enforce_postconditions({cid!r}, outputs)
+    return outputs
+'''
+        return func_name, body
+
+    if spec.operation_template in {"text_metric_object", "text_metric_string"}:
+        is_str_summary = spec.operation_template == "text_metric_string"
+        body = f'''def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    _enforce_preconditions({cid!r}, inputs)
+    raw = str(inputs.get({in_port!r}, ""))
+    if not raw.strip():
+        raise ContractViolationError("{cid}: precondition NonEmptyTrimmed({in_port}) violated")
+    mode = str(config.get("mode", {default_mode!r})).lower()
+    kw = str(config.get("keyword", {default_kw!r})).lower()
+    if mode in ("sentence_count", "sentences"):
+        m_key, m_val = "sentences", len([s for s in re.split(r"[.!?]+", raw) if s.strip()])
+    elif mode in ("line_count", "lines"):
+        m_key, m_val = "lines", len([ln for ln in raw.splitlines() if ln.strip()])
+    elif mode in ("digit_count", "digits"):
+        m_key, m_val = "digits", sum(1 for c in raw if c.isdigit())
+    elif mode in ("keyword_count", "keyword"):
+        m_key, m_val = "keyword_hits", raw.lower().count(kw or "amca")
+    else:
+        m_key, m_val = "metric", len(raw.split())
+    if {is_str_summary!r}:
+        outputs = {{{out_port!r}: f"characters={{len(raw)}}; words={{len(raw.split())}}; {{m_key}}={{m_val}}"}}
+    else:
+        outputs = {{{out_port!r}: f"{{m_key}}={{m_val}}"}}
+    _enforce_postconditions({cid!r}, outputs)
+    return outputs
+'''
+        return func_name, body
+
+    if spec.operation_template == "dual_finding_combiner":
+        ports = list(spec.input_ports.keys())
+        p_a = ports[0] if len(ports) >= 1 else "finding_a"
+        p_b = ports[1] if len(ports) >= 2 else "finding_b"
+        body = f'''def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    _enforce_preconditions({cid!r}, inputs)
+    outputs = {{{out_port!r}: f"{{inputs[{p_a!r}]}}; {{inputs[{p_b!r}]}}"}}
+    _enforce_postconditions({cid!r}, outputs)
+    return outputs
+'''
+        return func_name, body
+
+    body = f'''def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    _enforce_preconditions({cid!r}, inputs)
+    tag = str(config.get("tag", {default_tag!r}))
+    outputs = {{{out_port!r}: {{"summary": str(inputs[{in_port!r}]), "tag": tag}}}}
+    _enforce_postconditions({cid!r}, outputs)
+    return outputs
+'''
+    return func_name, body
 
 
-def _render_components_py() -> str:
+def _render_components_py(candidate: CandidateGraph | None = None) -> str:
+    custom_specs: dict[str, CustomComponentSpec] = {s.component_id: s for s in list_custom_component_specs()}
+    if candidate is not None:
+        for node in candidate.nodes:
+            spec = get_custom_component_spec(node.component)
+            if spec is not None:
+                custom_specs[spec.component_id] = spec
+
+    custom_funcs_code: list[str] = []
+    dispatch_entries = [
+        '    "input_source": run_input_source,',
+        '    "validate_text": run_validate_text,',
+        '    "analysis_a": run_analysis_a,',
+        '    "analysis_b": run_analysis_b,',
+        '    "aggregate_results": run_aggregate_results,',
+        '    "generate_report": run_generate_report,',
+    ]
+    for cid in sorted(custom_specs):
+        fn_name, fn_code = _render_custom_component_function(custom_specs[cid])
+        custom_funcs_code.append(fn_code)
+        dispatch_entries.append(f"    {cid!r}: {fn_name},")
+
+    custom_section = ("\n\n" + "\n\n".join(custom_funcs_code)) if custom_funcs_code else ""
+    dispatch_block = "COMPONENT_DISPATCH = {\n" + "\n".join(dispatch_entries) + "\n}\n"
+
     return '''"""Deterministic bounded components with runtime Hoare precondition/postcondition guards."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -118,6 +216,12 @@ def _enforce_preconditions(component_id: str, inputs: dict[str, Any]) -> None:
         val = inputs.get("summary")
         if not isinstance(val, str) or not val.strip():
             raise ContractViolationError(f"{component_id}: precondition AggregatedSummary(summary) violated")
+    elif component_id != "input_source":
+        if not inputs:
+            raise ContractViolationError(f"{component_id}: missing required inputs")
+        for p_name, p_val in inputs.items():
+            if isinstance(p_val, str) and not p_val.strip():
+                raise ContractViolationError(f"{component_id}: precondition NonEmpty({p_name}) violated")
 
 
 def _enforce_postconditions(component_id: str, outputs: dict[str, Any]) -> None:
@@ -140,6 +244,9 @@ def _enforce_postconditions(component_id: str, outputs: dict[str, Any]) -> None:
         val = outputs.get("report")
         if not isinstance(val, dict) or "summary" not in val:
             raise ContractViolationError("generate_report: postcondition CompleteReport(report) violated")
+    else:
+        if not outputs:
+            raise ContractViolationError(f"{component_id}: postcondition non-empty outputs violated")
 
 
 def run_input_source(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
@@ -194,17 +301,32 @@ def run_generate_report(inputs: dict[str, Any], config: dict[str, Any], raw_inpu
     outputs = {"report": {"summary": str(inputs["summary"])}}
     _enforce_postconditions("generate_report", outputs)
     return outputs
+''' + custom_section + "\n\n" + dispatch_block
 
 
-COMPONENT_DISPATCH = {
-    "input_source": run_input_source,
-    "validate_text": run_validate_text,
-    "analysis_a": run_analysis_a,
-    "analysis_b": run_analysis_b,
-    "aggregate_results": run_aggregate_results,
-    "generate_report": run_generate_report,
-}
-'''
+def expected_reference_final_output(candidate: CandidateGraph) -> dict[str, Any]:
+    """Compute the deterministic expected final_output of the sink node for reference input 'AMCA builds a graph.'."""
+    input_key = _detect_input_key(candidate)
+    comp_ns: dict[str, Any] = {}
+    exec(_render_components_py(candidate), comp_ns)
+    dispatch = comp_ns["COMPONENT_DISPATCH"]
+
+    order = _topological_sort(candidate) or [n.id for n in candidate.nodes]
+    node_map = {n.id: n for n in candidate.nodes}
+    incoming_by_target: dict[str, list[Any]] = {n.id: [] for n in candidate.nodes}
+    for edge in sorted(candidate.edges, key=lambda e: (e.target, e.input, e.source, e.output)):
+        incoming_by_target[edge.target].append(edge)
+
+    raw_inputs = {input_key: "AMCA builds a graph."}
+    state: dict[str, dict[str, Any]] = {}
+    for nid in order:
+        node = node_map[nid]
+        node_inputs: dict[str, Any] = {}
+        for edge in incoming_by_target.get(nid, []):
+            node_inputs[edge.input] = state[edge.source][edge.output]
+        fn = dispatch[node.component]
+        state[nid] = fn(node_inputs, dict(node.config), raw_inputs)
+    return state[order[-1]]
 
 
 def _render_pipeline_py(candidate: CandidateGraph) -> str:
@@ -423,7 +545,7 @@ def build_constructed_project(
         '__all__ = ["MACHINE_ID", "CANDIDATE_SHA256", "SPECIFICATION_SHA256", "run_machine"]\n'
     )
     _write("src/constructed_machine/__init__.py", init_code)
-    _write("src/constructed_machine/components.py", _render_components_py())
+    _write("src/constructed_machine/components.py", _render_components_py(candidate))
     _write("src/constructed_machine/pipeline.py", _render_pipeline_py(candidate))
     _write("src/constructed_machine/cli.py", _render_cli_py(input_key))
     _write("tests/test_constructed_machine.py", _render_tests_py(candidate, input_key))

@@ -11,6 +11,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from .custom_components import list_custom_component_specs
+
 ROOT = Path(__file__).resolve().parents[2]
 
 SYSTEM_PROMPT = """You are the AMCA machine-specification author. Return ONLY one valid YAML document and nothing else (no markdown prose, no explanations outside YAML).
@@ -296,6 +300,24 @@ def discover_provider_models(
     return []
 
 
+def build_dynamic_system_prompt() -> str:
+    """Return SYSTEM_PROMPT enriched with any user-registered custom components."""
+    custom_specs = list_custom_component_specs()
+    if not custom_specs:
+        return SYSTEM_PROMPT
+    extra_lines = [
+        "",
+        "Additional User-Registered Custom Components (also allowed in `nodes[].component`):",
+    ]
+    for spec in custom_specs:
+        extra_lines.append(
+            f"- `{spec.component_id}` (alias `{spec.alias}`): inputs={spec.input_ports}, "
+            f"outputs={spec.output_ports}, config_keys={list(spec.config_keys)}, "
+            f"default_config={spec.default_config}, role={spec.role!r}"
+        )
+    return SYSTEM_PROMPT + "\n" + "\n".join(extra_lines)
+
+
 def synthesize_deterministic_yaml(
     prompt: str,
     *,
@@ -303,16 +325,17 @@ def synthesize_deterministic_yaml(
     output_format: str = "v1",
 ) -> str:
     """Built-in deterministic rule/registry synthesizer requiring no external API key."""
+    lower_prompt = prompt.lower()
     if current_yaml and "apiVersion: amca/v1alpha1" in current_yaml:
         output_format = "v1alpha1"
-    elif "v1alpha1" in prompt.lower() or "machinesystem" in prompt.lower():
+    elif "v1alpha1" in lower_prompt or "machinesystem" in lower_prompt:
         output_format = "v1alpha1"
 
     # Extract requested machine_id if mentioned in prompt
     machine_id = "reference_text_analysis"
     for token in prompt.replace("`", " ").replace("'", " ").replace('"', " ").split():
         cleaned = token.strip(".,:;()[]{}")
-        if cleaned.startswith("text_") or cleaned.endswith("_v2") or cleaned.endswith("-v2") or "machine" in cleaned:
+        if cleaned.startswith("text_") or cleaned.endswith("_v2") or cleaned.endswith("-v2") or "machine" in cleaned or "pipeline" in cleaned:
             if cleaned and cleaned[0].islower() and all(c.islower() or c.isdigit() or c in "_-" for c in cleaned):
                 machine_id = cleaned
                 break
@@ -320,9 +343,79 @@ def synthesize_deterministic_yaml(
     input_key = "text"
     for token in prompt.replace("`", " ").replace("'", " ").replace('"', " ").split():
         cleaned = token.strip(".,:;()[]{}")
-        if cleaned.endswith("_text") and cleaned[0].islower():
+        if cleaned.endswith("_text") and cleaned != "validate_text" and cleaned[0].islower():
             input_key = cleaned
             break
+
+    # Check if prompt mentions a registered custom component
+    matched_custom = None
+    for spec in list_custom_component_specs():
+        if spec.component_id.lower() in lower_prompt or spec.alias.lower() in lower_prompt:
+            matched_custom = spec
+            break
+
+    if matched_custom is not None and output_format == "v1":
+        cid = matched_custom.component_id
+        cfg = dict(matched_custom.default_config)
+        if matched_custom.operation_template == "text_transform":
+            doc = {
+                "schema_version": "1.0",
+                "machine_id": machine_id,
+                "nodes": [
+                    {"id": "input", "component": "input_source", "config": {"input_key": input_key}},
+                    {"id": "custom_step", "component": cid, "config": cfg},
+                    {"id": "analysis_a", "component": "analysis_a", "config": {}},
+                ],
+                "edges": [
+                    {"from": "input", "out": "text", "to": "custom_step", "in": "text"},
+                    {"from": "custom_step", "out": "text", "to": "analysis_a", "in": "text"},
+                ],
+            }
+            return yaml.safe_dump(doc, sort_keys=False).strip()
+        if matched_custom.operation_template == "text_metric_string":
+            doc = {
+                "schema_version": "1.0",
+                "machine_id": machine_id,
+                "nodes": [
+                    {"id": "input", "component": "input_source", "config": {"input_key": input_key}},
+                    {"id": "validate", "component": "validate_text", "config": {}},
+                    {"id": "custom_summary", "component": cid, "config": cfg},
+                    {"id": "report", "component": "generate_report", "config": {}},
+                ],
+                "edges": [
+                    {"from": "input", "out": "text", "to": "validate", "in": "text"},
+                    {"from": "validate", "out": "text", "to": "custom_summary", "in": "text"},
+                    {"from": "custom_summary", "out": "summary", "to": "report", "in": "summary"},
+                ],
+            }
+            return yaml.safe_dump(doc, sort_keys=False).strip()
+        if matched_custom.operation_template == "text_metric_object":
+            doc = {
+                "schema_version": "1.0",
+                "machine_id": machine_id,
+                "nodes": [
+                    {"id": "input", "component": "input_source", "config": {"input_key": input_key}},
+                    {"id": "validate", "component": "validate_text", "config": {}},
+                    {"id": "custom_metric", "component": cid, "config": cfg},
+                ],
+                "edges": [
+                    {"from": "input", "out": "text", "to": "validate", "in": "text"},
+                    {"from": "validate", "out": "text", "to": "custom_metric", "in": "text"},
+                ],
+            }
+            return yaml.safe_dump(doc, sort_keys=False).strip()
+
+    if any(tok in lower_prompt for tok in ("mesin tunggal", "single machine", "single_machine")) and output_format == "v1":
+        template_single = (ROOT / "examples" / "valid_single_machine.yaml").read_text(encoding="utf-8")
+        template_single = template_single.replace('machine_id: "single-text-reader"', f'machine_id: "{machine_id}"', 1)
+        template_single = template_single.replace('input_key: "text"', f'input_key: "{input_key}"', 1)
+        return template_single.strip()
+
+    if any(tok in lower_prompt for tok in ("pipeline linier", "linear pipeline", "linear_pipeline")) and output_format == "v1":
+        template_lin = (ROOT / "examples" / "valid_linear_pipeline.yaml").read_text(encoding="utf-8")
+        template_lin = template_lin.replace('machine_id: "linear-char-pipeline"', f'machine_id: "{machine_id}"', 1)
+        template_lin = template_lin.replace('input_key: "text"', f'input_key: "{input_key}"', 1)
+        return template_lin.strip()
 
     if output_format == "v1alpha1":
         sys_id = machine_id.replace("_", "-")
@@ -370,11 +463,12 @@ def generate_yaml(
         context.append(f"{item['role']}: {item['content'][:8_000]}")
     context.append("Latest user request (untrusted requirements):\n" + prompt[:8_000])
     joined = "\n\n".join(context)
+    dynamic_prompt = build_dynamic_system_prompt()
 
     if provider == "Gemini" or norm == "gemini":
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         payload = {
-            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "systemInstruction": {"parts": [{"text": dynamic_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": joined}]}],
             "generationConfig": {"temperature": 0.1, "maxOutputTokens": 8192},
         }
@@ -424,7 +518,7 @@ def generate_yaml(
         payload = {
             "model": model,
             "max_tokens": 4096,
-            "system": SYSTEM_PROMPT,
+            "system": dynamic_prompt,
             "messages": [{"role": "user", "content": joined}],
         }
         data = _post(
@@ -451,7 +545,7 @@ def generate_yaml(
             "model": model,
             "temperature": 0.1,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": dynamic_prompt},
                 {"role": "user", "content": joined},
             ],
         }
@@ -486,7 +580,7 @@ def generate_yaml(
             "model": model,
             "temperature": 0.1,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": dynamic_prompt},
                 {"role": "user", "content": joined},
             ],
         }

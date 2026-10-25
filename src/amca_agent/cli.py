@@ -19,6 +19,15 @@ from amca_agent.approvals import (
 )
 from amca_agent.artifacts import ARTIFACT_ROOT, ROOT, list_sessions, load_chat, save_chat, save_run
 from amca_agent.builder import DEFAULT_CONSTRUCTED_PROJECTS_DIR, build_constructed_project
+from amca_agent.custom_components import (
+    OPERATION_TEMPLATES,
+    draft_custom_component_from_description,
+    format_catalog_markdown,
+    get_registered_components_catalog,
+    load_custom_components_registry,
+    register_custom_component,
+    unregister_custom_component,
+)
 from amca_agent.formal_verifier import verify_specification_formal
 from amca_agent.graph import to_dot
 from amca_agent.hardware import (
@@ -198,6 +207,16 @@ def _chat(args) -> int:
             current = _example(args.example).read_text(encoding="utf-8")
             print(f"Contoh dimuat: {args.example}")
         if not args.problem:
+            catalog_items = get_registered_components_catalog()
+            comp_list_str = ", ".join(
+                f"{item['component_id']} ({item['input_ports']} -> {item['output_ports']})"
+                for item in catalog_items
+            )
+            print(f"[Katalog Komponen Terdaftar ({len(catalog_items)})]: {comp_list_str}")
+            print(
+                "[Batasan Prompt]: YAML hanya dapat merangkai komponen terdaftar di atas "
+                "(input_source wajib divalidasi oleh validate_text sebelum analisis; mendukung single_machine, linear_pipeline, nonlinear_dag)."
+            )
             print("Mesin/agent apakah yang Anda ingin buat?")
             args.problem = input("Problem statement: ").strip()
         if not args.problem:
@@ -218,7 +237,7 @@ def _chat(args) -> int:
         _yaml(current)
 
     print(
-        "Perintah sesi: revisi <permintaan>, show, load <yaml>, versions, restore <nomor>, "
+        "Perintah sesi: components, register-component <id> <deskripsi>, revisi <permintaan>, show, load <yaml>, versions, restore <nomor>, "
         "validate, proof, hardware, approve-spec, plan, approve-construction, construct, graph [FILE.dot], run <input.json>, quit"
     )
     while True:
@@ -232,6 +251,21 @@ def _chat(args) -> int:
             return 0
         if line == "show":
             print(current or "(belum ada YAML)")
+        elif line == "components":
+            print(format_catalog_markdown())
+        elif line.startswith("register-component "):
+            parts = line.split(maxsplit=2)
+            if len(parts) < 3:
+                print("Gunakan: register-component <component_id> <deskripsi peran>", file=sys.stderr)
+            else:
+                cid, desc = parts[1].strip(), parts[2].strip()
+                try:
+                    draft = draft_custom_component_from_description(desc, component_id=cid)
+                    reg_path = ARTIFACT_ROOT / "custom_components" / "custom_registry.json"
+                    registered = register_custom_component(draft, persist=True, registry_path=reg_path)
+                    print(f"Komponen kustom terdaftar: {registered.component_id} ({registered.alias}) -> {registered.output_ports}")
+                except Exception as exc:
+                    print(f"Gagal mendaftarkan komponen: {getattr(exc, 'message', str(exc))}", file=sys.stderr)
         elif line == "versions":
             for index, version in enumerate(versions, 1):
                 print(
@@ -461,6 +495,26 @@ def _parser() -> argparse.ArgumentParser:
     example = sub.add_parser("example", help="copy an example YAML")
     example.add_argument("name")
     example.add_argument("--output")
+    comp_cmd = sub.add_parser("components", help="list all registered components (built-in + custom) and prompt boundaries")
+    comp_cmd.add_argument("--json", action="store_true", help="output catalog as JSON instead of Markdown")
+    comp_cmd.add_argument("--output")
+    reg_cmd = sub.add_parser("register-component", help="author and register a new custom deterministic component")
+    reg_cmd.add_argument("--id", required=True, help="component_id matching ^[a-z][a-z0-9_-]{0,63}$")
+    reg_cmd.add_argument("--alias", default="", help="optional amca/v1alpha1 alias, e.g. custom.sentence_counter")
+    reg_cmd.add_argument("--name", default="", help="display name of the component")
+    reg_cmd.add_argument("--role", default="", help="description / role of the component")
+    reg_cmd.add_argument(
+        "--template",
+        default="",
+        choices=["", *OPERATION_TEMPLATES.keys()],
+        help="deterministic operation template",
+    )
+    reg_cmd.add_argument("--mode", default="", help="operation mode (e.g. sentence_count, line_count, uppercase, keyword_count)")
+    reg_cmd.add_argument("--keyword", default="", help="optional keyword parameter for keyword_count")
+    reg_cmd.add_argument("--spec-file", help="optional JSON file containing full CustomComponentSpec")
+    reg_cmd.add_argument("--output")
+    unreg_cmd = sub.add_parser("unregister-component", help="remove a user-registered custom component")
+    unreg_cmd.add_argument("--id", required=True, help="custom component_id to remove")
     validate = sub.add_parser("validate", help="validate and verify YAML without running")
     validate.add_argument("spec")
     validate.add_argument("--output")
@@ -512,12 +566,63 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    custom_reg_path = ARTIFACT_ROOT / "custom_components" / "custom_registry.json"
+    load_custom_components_registry(custom_reg_path)
     try:
         if args.command == "examples":
             for path in _examples():
                 print(path.name)
         elif args.command == "example":
             _yaml(_example(args.name).read_text(encoding="utf-8"), args.output)
+        elif args.command == "components":
+            if args.json:
+                _json({"components": get_registered_components_catalog()}, args.output)
+            else:
+                md = format_catalog_markdown()
+                if args.output:
+                    Path(args.output).write_text(md + "\n", encoding="utf-8")
+                else:
+                    print(md)
+            return 0
+        elif args.command == "register-component":
+            if args.spec_file:
+                spec_data = json.loads(Path(args.spec_file).read_text(encoding="utf-8"))
+                spec_data["component_id"] = args.id or spec_data.get("component_id", "")
+                registered = register_custom_component(spec_data, persist=True, registry_path=custom_reg_path)
+            elif not args.template:
+                draft = draft_custom_component_from_description(
+                    args.role or f"Komponen kustom {args.id}",
+                    component_id=args.id,
+                    alias=args.alias,
+                )
+                registered = register_custom_component(draft, persist=True, registry_path=custom_reg_path)
+            else:
+                params: dict[str, Any] = {}
+                cfg_keys: list[str] = []
+                def_cfg: dict[str, Any] = {}
+                if args.mode:
+                    params["mode"] = args.mode
+                if args.keyword:
+                    params["keyword"] = args.keyword
+                    cfg_keys.append("keyword")
+                    def_cfg["keyword"] = args.keyword
+                spec_dict = {
+                    "component_id": args.id,
+                    "alias": args.alias or f"custom.{args.id}",
+                    "name": args.name or args.id.replace("_", " ").title(),
+                    "role": args.role or f"Komponen deterministik kustom {args.id}",
+                    "operation_template": args.template,
+                    "config_keys": cfg_keys,
+                    "default_config": def_cfg,
+                    "template_params": params,
+                }
+                registered = register_custom_component(spec_dict, persist=True, registry_path=custom_reg_path)
+            _json(registered.as_dict(), args.output)
+            return 0
+        elif args.command == "unregister-component":
+            unregister_custom_component(args.id, persist=True, registry_path=custom_reg_path)
+            _json({"unregistered": args.id, "status": "ok"})
+            return 0
         elif args.command == "validate":
             candidate, verification, formal_cert = _check(Path(args.spec).read_text(encoding="utf-8"))
             _json(

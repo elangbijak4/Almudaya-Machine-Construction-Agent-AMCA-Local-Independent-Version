@@ -163,3 +163,30 @@ Melanjutkan dari Tutorial 4 setelah `approve-spec` berhasil:
    - Suite `unittest` milik proyek yang dihasilkan dieksekusi secara nyata dan lulus 100%.
    - Arsip **`<machine_id>-rev<NNN>-handover.zip`** berhasil dibuat, berisi kode sumber, test, `machine.yaml`, `formal-proof-certificate.json`, `machine-dag.dot`, `README.md`, dan `construction-log.jsonl` (tanpa satu pun API key di dalamnya).
 
+---
+
+## Tutorial 6: Membuat & Mendaftarkan Komponen Baru, Memeriksa Katalog Batasan Prompt, & Mengonstruksi Mesin Kustom
+
+Tutorial ini memandu Anda menambahkan komponen deterministik baru di luar 6 komponen bawaan, memeriksa **Katalog Komponen Terdaftar & Batasan Prompt**, lalu mengonstruksi paket proyek Python mandiri (`.zip`) yang menggunakan komponen kustom tersebut:
+
+1. **Tampilkan Katalog Komponen Terdaftar & Batasan Prompt saat ini**:
+   ```powershell
+   & $PY -m amca_agent.cli components
+   ```
+   Perhatikan tabel komponen bawaan (`input_source`, `validate_text`, `analysis_a`, `analysis_b`, `aggregate_results`, `generate_report`) beserta panduan **Batasan Prompt**.
+2. **Buat dan daftarkan komponen baru (`sentence_counter`)**:
+   ```powershell
+   & $PY -m amca_agent.cli register-component --id sentence_counter --alias custom.sentence_counter --name "Sentence Counter" --role "Menghitung jumlah kalimat dari teks yang telah divalidasi" --template text_metric_object --mode sentence_count
+   ```
+   *(Di GUI `app.py`, Anda juga dapat membuka **Bagian 8 · Pembuat & Pendaftar Komponen Baru (Custom Component Studio)** dan menekan **Daftarkan Komponen ke Registry AMCA** atau **Draft Otomatis dari Deskripsi Peran**).*
+3. **Verifikasi bahwa `sentence_counter` kini tampil di Katalog Komponen Terdaftar**:
+   ```powershell
+   & $PY -m amca_agent.cli components
+   ```
+   Kini tabel menampilkan **7 Komponen (6 Inti, 1 Kustom)** beserta kontrak Hoare untuk `sentence_counter`.
+4. **Bangun YAML dan Konstruksi Paket Proyek Mandiri (`.zip`) dengan Komponen Baru**:
+   Di dalam sesi `chat` (`& $PY -m amca_agent.cli chat --provider "Offline Deterministic"`), masukkan prompt:
+   > *"Buat pipeline `machine_id: custom_sentence_machine` menggunakan `sentence_counter` setelah `validate_text`."*
+   Lalu jalankan `approve-spec`, `plan`, `approve-construction`, dan `construct`. Proyek mandiri yang dihasilkan di `artifacts/constructed_projects/custom_sentence_machine-rev001/` dan arsip `.zip`-nya akan memuat fungsi `run_custom_sentence_counter` beserta *runtime Hoare guard*-nya dan lulus **Stage 3 AST Proof (`PROVED`)**!
+
+
