@@ -25,6 +25,7 @@ from .planner import ConstructionPlan
 SECRET_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_\-]{12,}"),
     re.compile(r"AIza[A-Za-z0-9_\-]{12,}"),
+    re.compile(r"AQ\.[A-Za-z0-9_\-]{12,}"),
     re.compile(r"xai-[A-Za-z0-9_\-]{12,}"),
     re.compile(r"Bearer\s+[A-Za-z0-9._\-]{12,}"),
 )
