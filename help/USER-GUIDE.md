@@ -1,6 +1,6 @@
 # AMCA User Guide (Panduan Operasional Pengguna — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.3.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, dan Pustaka Komponen Kumulatif & On-The-Fly Code Agent `v0.3.0`) · **Bahasa:** Indonesia  
+**Versi Dokumen:** `0.4.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, dan Dashboard Dinamis Adaptif `v0.4.0`) · **Bahasa:** Indonesia  
 **Peran Dokumen:** Panduan praktis bagi peneliti dan perekayasa perangkat lunak untuk mengoperasikan AMCA Versi Lokal Mandiri sehari-hari, sekaligus acuan verifikasi fungsional (*Functional Verification Reference*).
 
 ---
@@ -36,17 +36,20 @@ Sebelum meminta AMCA merancang atau membangun mesin/agen, atur terlebih dahulu s
 
 ### Opsi B — Menghubungkan ke **9Router** (Model Tunggal atau Combo 9Router)
 Jika Anda menjalankan **9Router** di komputer Anda (`http://localhost:20128`):
-1. Pilih provider **`9Router (nine_router)`** dengan Base URL `http://127.0.0.1:20128/v1` dan isi API Key 9Router Anda.
-2. Klik **Pindai Model & Combo 9Router** (atau jalankan `discover-models --provider nine_router`).
-3. Pilih salah satu model atau pilih langsung **nama Combo 9Router** Anda (misalnya `premium-coding` atau `free-combo`) agar rantai *fallback* 9Router otomatis menangani perpindahan model jika terjadi *rate limit*.
+1. Pilih provider **`9Router (nine_router)`**.
+2. **Ketiadaan Beban API Key**: Seluruh API key model AI (Gemini, Claude, OpenAI, dll.) dikelola di dalam dashboard 9Router. AMCA secara otomatis membaca `Default Key` lokal dari database 9Router di latar belakang, sehingga **Anda tidak perlu mengetikkan API key di AMCA**.
+3. **Pemeriksaan Status Real-Time**: AMCA langsung mem-probe port `20128`:
+   - Jika aktif, muncul badge hijau `🟢 9Router Aktif`.
+   - Jika belum ada akun provider di 9Router, AMCA menyajikan panduan ramah untuk menghubungkan akun di dashboard [http://localhost:20128](http://localhost:20128) menu **Providers**.
+4. Klik **Pindai Model & Combo 9Router** dan pilih alias Combo Anda (misal `free-combo`, `premium-coding`) atau model spesifik.
 
-### Opsi C — Menghubungkan ke **Ollama**, **LM Studio**, atau **OpenCode**
+### Opsi C — Menghubungkan ke **Ollama**, **LM Studio**, atau **OpenCode** (Tanpa API Key)
 1. Pilih konektor runtime lokal yang sedang aktif di laptop Anda:
    - **`Ollama`** (`http://127.0.0.1:11434`)
    - **`LM Studio`** (`http://127.0.0.1:1234/v1`)
    - **`OpenCode`** (`http://127.0.0.1:4096` atau CLI `opencode`)
-2. Klik **Deteksi Model Tersedia** (`discover-models`). AMCA akan menampilkan daftar seluruh model yang sudah terpasang di Ollama, LM Studio, atau OpenCode Anda.
-3. Pilih model yang diinginkan untuk menjadi otak Agent Utama AMCA.
+2. **Antarmuka Otomatis Tanpa API Key**: AMCA langsung mem-probe ketersediaan port secara real-time dan menampilkan dropdown model yang telah terpasang di laptop Anda. Kolom API key disembunyikan sepenuhnya.
+3. Pilih model lokal yang diinginkan untuk menjadi otak Agent Utama AMCA.
 
 ### Opsi D — Mengunduh Model Lokal ke Laptop (Dijaga oleh Inspeksi Perangkat Keras)
 Jika Anda memilih untuk mengunduh model baru ke laptop (`local_model` atau *pull* model baru via Ollama):

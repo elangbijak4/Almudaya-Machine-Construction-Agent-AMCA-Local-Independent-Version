@@ -1,6 +1,6 @@
 # AMCA User Manual (Rincian Teknis & Acuan Verifikasi Sistem — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.3.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, dan Pustaka Komponen Kumulatif & On-The-Fly Code Agent `v0.3.0`)  
+**Versi Dokumen:** `0.4.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, dan Dashboard Dinamis Adaptif `v0.4.0`)  
 **Bahasa:** Indonesia  
 **Status:** Kontrak Referensi Teknis & Orakel Verifikasi Implementasi (*Verification Oracle*)
 
@@ -66,6 +66,25 @@ Baik **Agent Utama AMCA (`amca_primary`)** maupun setiap **Subworker (`subworker
 | 10 | `local_model` | Direktori `artifacts/local_models/` | Unduhan berkas model GGUF lokal langsung ke laptop. **Wajib lulus inspeksi `hardware.py` (`status == "ELIGIBLE"`)** dan persetujuan pengguna sebelum diunduh. |
 | 11 | `amca_combo` | Internal `FallbackComboRouter` | **Rantai Fallback Combo Native AMCA** (`Tier 1 -> Tier 2 -> ... -> Tier N`) yang menggabungkan beberapa provider di atas dengan *failover* otomatis saat terjadi limit token atau kuota habis. |
 | 12 | `offline_deterministic` | Internal (`src/amca_agent/`) | Synthesizer deterministik berbasis aturan/registri bawaan yang berjalan 100% tanpa koneksi jaringan dan tanpa LLM/API key. |
+
+### 3.2 Arsitektur Dashboard Dinamis Adaptif (*Dynamic Dashboard Architecture*)
+
+Untuk menghapus kebingungan pengguna di tengah tersedianya banyak jenis provider, antarmuka grafis AMCA (`app.py`) menerapkan pola **Dashboard Dinamis Adaptif** yang dipicu secara reaktif saat opsi provider dipilih:
+1. **Perilaku 9Router**:
+   - Mem-probe ketersediaan port `20128` dan membaca database SQLite lokal (`data.sqlite`).
+   - Jika port aktif, menampilkan badge hijau beserta status akun provider aktif. Jika belum ada akun provider di 9Router, menampilkan kartu edukatif memandu pengguna ke `http://localhost:20128`.
+   - **Eliminasi Kolom API Key**: Kolom API key disembunyikan dari tampilan utama karena AMCA secara otomatis mendeteksi dan menggunakan `Default Key` lokal 9Router. Disediakan expander tertutup jika pengguna ingin meng-override kunci untuk 9Router remote.
+2. **Perilaku Cloud API Langsung (Google Gemini, OpenAI, Claude, Groq)**:
+   - Menampilkan daftar rekomendasi model riset terkurasi.
+   - Menampilkan kolom API key aman dengan badge penegasan bahwa kredensial hanya disimpan di RAM memori sesi (`SessionCredentialVault`).
+3. **Perilaku Runtime Model Lokal (Ollama, LM Studio, OpenCode)**:
+   - Mem-probe status port lokal (11434 / 1234 / 4096) secara real-time.
+   - Mengambil dan menampilkan dropdown model yang sudah terunduh di laptop pengguna.
+   - Kolom API key dihilangkan dari antarmuka utama.
+4. **Perilaku Local Model (GGUF)**:
+   - Mengaktifkan panel evaluasi perangkat keras `hardware.py` (RAM, Disk, CPU) dan gerbang kelayakan `ELIGIBLE`.
+5. **Perilaku Mode Offline Deterministic**:
+   - Menampilkan banner `Mode Air-Gapped (100% Offline)` dan menyembunyikan seluruh parameter jaringan.
 
 ---
 

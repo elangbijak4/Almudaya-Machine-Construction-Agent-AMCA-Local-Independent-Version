@@ -6,7 +6,7 @@ import unittest
 import urllib.error
 from unittest import mock
 
-from amca_agent.provider import ProviderError, generate_yaml
+from amca_agent.provider import ProviderError, generate_yaml, inspect_provider_runtime_status
 
 
 class _Response:
@@ -62,6 +62,24 @@ class ProviderAdapterTests(unittest.TestCase):
                 generate_yaml(provider="OpenAI", model="test", api_key="secret-value", prompt="x", history=[])
         self.assertNotIn("secret-value", str(raised.exception))
         self.assertIn("HTTP 401", str(raised.exception))
+
+    def test_inspect_provider_runtime_status_returns_structured_diagnostics(self):
+        # 1. 9Router status probe
+        res_9r = inspect_provider_runtime_status("9router")
+        self.assertIn("reachable", res_9r)
+        self.assertIn("status_badge", res_9r)
+        self.assertIn("active_accounts", res_9r)
+        self.assertIn("combos", res_9r)
+
+        # 2. Ollama status probe
+        res_ollama = inspect_provider_runtime_status("ollama")
+        self.assertIn("reachable", res_ollama)
+        self.assertIn("status_badge", res_ollama)
+
+        # 3. LM Studio probe
+        res_lms = inspect_provider_runtime_status("lm_studio")
+        self.assertIn("reachable", res_lms)
+        self.assertIn("status_badge", res_lms)
 
 
 if __name__ == "__main__":

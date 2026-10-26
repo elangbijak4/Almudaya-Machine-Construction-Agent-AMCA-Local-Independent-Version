@@ -51,6 +51,7 @@ from amca_agent.provider import (
     PROVIDER_DEFAULT_URLS,
     ProviderError,
     discover_provider_models,
+    inspect_provider_runtime_status,
 )
 from amca_agent.system_spec import load_any_spec_to_candidate
 
@@ -181,18 +182,95 @@ with st.sidebar:
     base_url_default = PROVIDER_DEFAULT_URLS.get(provider, "")
     base_url: str | None = None
 
-    if provider in {"9Router", "Ollama", "LM Studio", "OpenCode", "Custom OpenAI-Compatible"}:
-        base_url = st.text_input("Endpoint Base URL", value=base_url_default, key=f"url_{provider}")
-        if st.button("Pindai Model / Combo Lokal"):
+    api_key: str = ""
+    model: str = default_model_val
+
+    # =========================================================================
+    # Kategori 1: 9Router (Local Proxy Gateway & Combos)
+    # =========================================================================
+    if provider == "9Router":
+        base_url = st.text_input("Endpoint 9Router", value=base_url_default or "http://127.0.0.1:20128/v1", key="url_9router")
+        st_9r = inspect_provider_runtime_status("9router", base_url=base_url)
+        st.markdown(f"**Status Gateway**: {st_9r['status_badge']}")
+        if st_9r["guidance"]:
+            st.info(st_9r["guidance"])
+
+        if st.button("Pindai Model & Combo 9Router"):
             try:
-                st.session_state.discovered_models = discover_provider_models(provider, base_url=base_url)
+                st.session_state.discovered_models = discover_provider_models("9router", base_url=base_url)
                 st.success(f"Ditemukan {len(st.session_state.discovered_models)} model/Combo.")
             except ProviderError as exc:
                 st.warning(str(exc))
-        if st.session_state.discovered_models:
-            st.caption("Model terdeteksi: " + ", ".join(st.session_state.discovered_models[:8]))
 
-    if provider == "Local Model":
+        combos_avail = st_9r.get("combos", [])
+        discovered = st.session_state.discovered_models or []
+        model_options = []
+        if combos_avail:
+            model_options.extend(combos_avail)
+        if discovered:
+            for m in discovered:
+                if m not in model_options:
+                    model_options.append(m)
+        if not model_options:
+            model_options = ["free-combo", "premium-coding", "alicode-intl/qwen3.5-plus", "gemini/gemini-2.5-flash"]
+
+        default_idx = 0
+        if "free-combo" in model_options:
+            default_idx = model_options.index("free-combo")
+
+        model = st.selectbox("Pilih Model / Combo 9Router", model_options, index=default_idx, key="model_9router_select")
+        st.caption("🔒 *API key penyedia AI sudah dikelola di 9Router. AMCA otomatis menggunakan Default Key lokal.*")
+        with st.expander("⚙️ Pengaturan Lanjutan (Override 9Router Key)", expanded=False):
+            api_key = st.text_input("Kunci Akses 9Router (opsional, jika remote)", type="password", key="key_9router_override")
+
+    # =========================================================================
+    # Kategori 2: Cloud API Langsung (Google Gemini, OpenAI, Anthropic, xAI Grok, Custom)
+    # =========================================================================
+    elif provider in {"Google Gemini", "xAI (Grok)", "OpenAI", "Anthropic", "Custom OpenAI-Compatible"}:
+        st.caption(f"☁️ *Koneksi langsung ke Cloud API {provider}*")
+        if provider == "Custom OpenAI-Compatible":
+            base_url = st.text_input("Endpoint Base URL", value=base_url_default or "http://127.0.0.1:8000/v1", key="url_custom")
+
+        if provider == "Google Gemini":
+            gemini_recommendations = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro"]
+            model = st.selectbox("Pilih Model Gemini", gemini_recommendations, index=0, key="model_gemini_select")
+        else:
+            model = st.text_input("Model ID", value=default_model_val, key=f"model_{provider}")
+
+        api_key = st.text_input("API key (hanya di memori sesi RAM)", type="password", key=f"key_{provider}")
+        st.caption("🔒 *Kunci hanya disimpan di RAM laptop untuk sesi ini (`SessionCredentialVault`). Tidak pernah ditulis ke disk.*")
+
+    # =========================================================================
+    # Kategori 3: Runtime Model Lokal Laptop (Ollama, LM Studio, OpenCode)
+    # =========================================================================
+    elif provider in {"Ollama", "LM Studio", "OpenCode"}:
+        base_url = st.text_input("Endpoint Local Runtime", value=base_url_default, key=f"url_{provider}")
+        st_rt = inspect_provider_runtime_status(provider, base_url=base_url)
+        st.markdown(f"**Status Runtime**: {st_rt['status_badge']}")
+        if st_rt["guidance"]:
+            st.info(st_rt["guidance"])
+
+        if st.button(f"Pindai Model {provider}"):
+            try:
+                st.session_state.discovered_models = discover_provider_models(provider, base_url=base_url)
+                st.success(f"Ditemukan {len(st.session_state.discovered_models)} model.")
+            except ProviderError as exc:
+                st.warning(str(exc))
+
+        local_models = st_rt.get("models") or st.session_state.discovered_models or []
+        if local_models:
+            model = st.selectbox(f"Model {provider} Terpasang", local_models, key=f"model_select_{provider}")
+        else:
+            model = st.text_input("Model ID", value=default_model_val, key=f"model_{provider}")
+
+        st.caption("💻 *Runtime lokal berjalan di laptop tanpa perlu API key.*")
+        with st.expander("⚙️ Pengaturan Lanjutan (Bearer Token Opsional)", expanded=False):
+            api_key = st.text_input("Token Akses (opsional)", type="password", key=f"key_{provider}_opt")
+
+    # =========================================================================
+    # Kategori 4: Local Model GGUF Mandiri (Dijaga Hardware Gate)
+    # =========================================================================
+    elif provider == "Local Model":
         model = st.selectbox("Katalog Model Lokal Terkurasi", list(LOCAL_MODEL_CATALOG.keys()))
         hw_snap = inspect_host_hardware()
         elig = evaluate_local_model_eligibility(model, hardware=hw_snap)
@@ -208,6 +286,10 @@ with st.sidebar:
         else:
             st.error(f"Hardware Gate: {elig.decision} — {'; '.join(elig.reasons)}")
         api_key = ""
+
+    # =========================================================================
+    # Kategori 5: AMCA Combo (Rantai Fallback Native)
+    # =========================================================================
     elif provider == "AMCA Combo":
         model = st.text_input("Nama Rantai Combo", value="resilient-local-combo", key="combo_name")
         tier1_spec = st.text_input("Tier 1 (provider:model)", value="9Router:free-combo", key="combo_t1")
@@ -217,7 +299,7 @@ with st.sidebar:
             value="Offline Deterministic:builtin-deterministic-v1",
             key="combo_t3",
         )
-        api_key = st.text_input("API key Tier 1 (opsional, di memori sesi)", type="password")
+        api_key = st.text_input("API key Tier 1 (opsional, di memori sesi)", type="password", key="key_combo_t1")
         tiers_list = []
         for idx, raw_t in enumerate((tier1_spec, tier2_spec, tier3_spec), 1):
             if ":" in raw_t:
@@ -231,9 +313,15 @@ with st.sidebar:
                 )
         if tiers_list:
             harness.register_combo_chain(model, tiers_list, set_as_primary=True)
-    else:
-        model = st.text_input("Model", value=default_model_val, key=f"model_{provider}")
-        api_key = st.text_input("API key (hanya di memori sesi)", type="password")
+
+    # =========================================================================
+    # Kategori 6: Offline Deterministic (Mode Air-Gapped)
+    # =========================================================================
+    elif provider == "Offline Deterministic":
+        st.success("🛡️ **Mode Air-Gapped (100% Offline)**")
+        st.caption("Menggunakan pembuat spesifikasi berbasis aturan matematika deterministik. Tanpa koneksi jaringan, tanpa API key, tanpa biaya token.")
+        model = "builtin-v1"
+        api_key = ""
 
     if provider not in {"AMCA Combo", "Local Model"}:
         harness.configure_primary_agent(

@@ -1,6 +1,6 @@
 # AMCA User Tutorial (Tutorial Praktik Langkah-demi-Langkah & Skenario Verifikasi — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.3.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, dan Pustaka Komponen Kumulatif & On-The-Fly Code Agent `v0.3.0`) · **Bahasa:** Indonesia  
+**Versi Dokumen:** `0.4.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, dan Dashboard Dinamis Adaptif `v0.4.0`) · **Bahasa:** Indonesia  
 **Peran Dokumen:** Panduan *hands-on* langkah demi langkah dari tingkat dasar hingga tingkat lanjut (9Router/Combo Fallback, Hardware Gate, Subworker HITL, 3-Stage Formal Verification, Pustaka Komponen Kumulatif, Pengikatan Komponen Eksternal, Sintesis On-The-Fly Code Agent, dan Handover ZIP), sekaligus skenario uji terima (*Acceptance Test Scenarios*) saat verifikasi aplikasi Versi Lokal Mandiri.
 
 ---
@@ -76,15 +76,20 @@ Jika Anda menjalankan Ollama (`:11434`), LM Studio (`:1234`), atau OpenCode (`:4
 Tutorial ini mempraktikkan cara menghubungkan AMCA ke **9Router** (termasuk **Combo 9Router**) serta menyusun **Rantai Fallback Combo Native AMCA** agar sesi konstruksi tidak gagal saat sebuah model mencapai batas token (*token limit*) atau kuota habis (`HTTP 429`).
 
 ### Skenario A — Menggunakan Model atau Combo dari 9Router
-1. Pastikan 9Router berjalan di `http://127.0.0.1:20128`.
-2. Pindai daftar model dan Combo yang ada di 9Router:
-   ```powershell
-   & $PY -m amca_agent.cli discover-models --provider nine_router --base-url http://127.0.0.1:20128/v1
-   ```
-3. Mulai sesi konstruksi menggunakan alias Combo 9Router (misalnya `premium-coding` atau `free-combo`):
-   ```powershell
-   & $PY -m amca_agent.cli chat --provider nine_router --model premium-coding
-   ```
+1. Pastikan 9Router berjalan di `http://127.0.0.1:20128` dan memiliki minimal satu akun penyedia AI aktif di dashboard `http://localhost:20128` menu **Providers**.
+2. **Pada Antarmuka GUI (`app.py`)**:
+   - Pilih **Provider model: 9Router**.
+   - Perhatikan bahwa AMCA langsung mem-probe port 20128 (`🟢 9Router Aktif`), mendeteksi `Default Key` lokal secara otomatis, dan menyembunyikan kolom API key dari layar utama agar periset tidak bingung.
+   - Pilih alias Combo yang diinginkan (misal `free-combo` atau `premium-coding`) langsung dari dropdown.
+3. **Pada CLI**:
+   - Pindai daftar model dan Combo yang ada di 9Router:
+     ```powershell
+     & $PY -m amca_agent.cli discover-models --provider nine_router --base-url http://127.0.0.1:20128/v1
+     ```
+   - Mulai sesi konstruksi menggunakan alias Combo 9Router:
+     ```powershell
+     & $PY -m amca_agent.cli chat --provider nine_router --model premium-coding
+     ```
 
 ### Skenario B — Menyusun Rantai Fallback Combo Native di AMCA (`Tier 1 -> Tier 2 -> Tier 3`)
 1. Pada GUI (`app.py`), buka panel **Preliminary Harness & Combo Setup** $\to$ pilih tab **Combo & Fallback Chain Builder** (atau jalankan `& $PY -m amca_agent.cli combo-config`).

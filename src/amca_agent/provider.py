@@ -192,8 +192,23 @@ def _post(url: str, api_key: str, payload: dict, *, extra_headers: dict[str, str
         except Exception:
             body_text = ""
         reason = _classify_http_error(exc.code, body_text)
+        detail = ""
+        if body_text:
+            try:
+                err_data = json.loads(body_text)
+                if isinstance(err_data, dict):
+                    err_obj = err_data.get("error", err_data)
+                    if isinstance(err_obj, dict):
+                        detail = str(err_obj.get("message") or "")
+                    elif isinstance(err_obj, str):
+                        detail = err_obj
+            except Exception:
+                detail = body_text[:200].strip()
+        msg = f"API model menolak permintaan (HTTP {exc.code})."
+        if detail:
+            msg += f" Rincian: {detail}"
         raise ProviderError(
-            f"API model menolak permintaan (HTTP {exc.code}).",
+            msg,
             status_code=exc.code,
             trigger_reason=reason,
         ) from None
@@ -298,6 +313,123 @@ def discover_provider_models(
         raise ProviderError("Tidak dapat mendeteksi model dari OpenCode lokal (HTTP maupun CLI).")
 
     return []
+
+
+def inspect_provider_runtime_status(provider: str, *, base_url: str | None = None) -> dict:
+    """Inspect local runtime/gateway connectivity and configuration status for 9Router, Ollama, LM Studio, or OpenCode."""
+    norm = provider.strip().lower()
+    res = {
+        "provider": provider,
+        "reachable": False,
+        "status_badge": "🔴 Tidak terhubung",
+        "active_accounts": 0,
+        "combos": [],
+        "models": [],
+        "default_key_detected": False,
+        "guidance": "",
+    }
+    if norm in {"nine_router", "9router"}:
+        base = (base_url or "http://127.0.0.1:20128/v1").rstrip("/")
+        url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                res["reachable"] = (resp.status == 200)
+        except Exception:
+            res["reachable"] = False
+
+        candidates = []
+        if os.environ.get("APPDATA"):
+            candidates.append(Path(os.environ["APPDATA"]) / "9router" / "db" / "data.sqlite")
+        candidates.append(Path.home() / ".9router" / "db" / "data.sqlite")
+        for db_path in candidates:
+            if db_path.is_file():
+                try:
+                    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                    try:
+                        key_row = conn.execute("SELECT key FROM apiKeys WHERE isActive = 1 LIMIT 1").fetchone()
+                        if key_row and key_row[0]:
+                            res["default_key_detected"] = True
+                        res["combos"] = [
+                            str(r[0])
+                            for r in conn.execute("SELECT name FROM combos").fetchall()
+                            if r and r[0]
+                        ]
+                        acc_row = conn.execute("SELECT count(*) FROM providerConnections WHERE isActive = 1").fetchone()
+                        res["active_accounts"] = int(acc_row[0]) if acc_row else 0
+                    finally:
+                        conn.close()
+                    break
+                except Exception:
+                    continue
+
+        if res["reachable"]:
+            if res["active_accounts"] > 0:
+                res["status_badge"] = f"🟢 9Router Aktif ({res['active_accounts']} akun provider terhubung)"
+                res["guidance"] = ""
+            else:
+                res["status_badge"] = "🟡 9Router Aktif (Belum ada akun provider)"
+                res["guidance"] = (
+                    "9Router terdeteksi aktif di port 20128, namun belum ada akun provider yang disambungkan di dashboard 9Router. "
+                    "Buka http://localhost:20128 -> menu Providers untuk menambahkan akun AI (Gemini, Claude, OpenAI, dsb.)."
+                )
+        else:
+            res["status_badge"] = "🔴 9Router Tidak Terdeteksi di Port 20128"
+            res["guidance"] = "Pastikan 9Router sedang berjalan dengan perintah '9router start' di terminal Anda."
+        return res
+
+    if norm in {"ollama"}:
+        base = (base_url or "http://127.0.0.1:11434").rstrip("/")
+        try:
+            req = urllib.request.Request(f"{base}/api/tags", headers={"Accept": "application/json"}, method="GET")
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                data = json.loads(resp.read(300_000).decode("utf-8"))
+                models = [m.get("name", "") for m in data.get("models", []) if isinstance(m, dict) and m.get("name")]
+                res["reachable"] = True
+                res["models"] = models
+                res["status_badge"] = f"🟢 Ollama Aktif ({len(models)} model terpasang)"
+        except Exception:
+            res["reachable"] = False
+            res["status_badge"] = "🟡 Ollama Tidak Terdeteksi di Port 11434"
+            res["guidance"] = "Jalankan 'ollama serve' di terminal untuk mengaktifkan Ollama."
+        return res
+
+    if norm in {"lm_studio", "lm studio"}:
+        base = (base_url or "http://127.0.0.1:1234/v1").rstrip("/")
+        url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                data = json.loads(resp.read(300_000).decode("utf-8"))
+                items = data.get("data", data.get("models", []))
+                models = [item.get("id", "") for item in items if isinstance(item, dict) and item.get("id")]
+                res["reachable"] = True
+                res["models"] = models
+                res["status_badge"] = f"🟢 LM Studio Aktif ({len(models)} model)"
+        except Exception:
+            res["reachable"] = False
+            res["status_badge"] = "🟡 LM Studio Tidak Terdeteksi di Port 1234"
+            res["guidance"] = "Buka aplikasi LM Studio dan mulai 'Local Server' di port 1234."
+        return res
+
+    if norm in {"opencode"}:
+        base = (base_url or "http://127.0.0.1:4096").rstrip("/")
+        try:
+            req = urllib.request.Request(f"{base}/v1/models", headers={"Accept": "application/json"}, method="GET")
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                data = json.loads(resp.read(300_000).decode("utf-8"))
+                items = data.get("data", data.get("models", []))
+                models = [item.get("id", "") for item in items if isinstance(item, dict) and item.get("id")]
+                res["reachable"] = True
+                res["models"] = models
+                res["status_badge"] = f"🟢 OpenCode Aktif ({len(models)} model)"
+        except Exception:
+            res["reachable"] = False
+            res["status_badge"] = "🟡 OpenCode Tidak Terdeteksi di Port 4096"
+            res["guidance"] = "Jalankan 'opencode' di terminal untuk mengaktifkan server OpenCode."
+        return res
+
+    return res
 
 
 NEW_COMPONENT_PLANNING_RULES = """
