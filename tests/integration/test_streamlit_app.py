@@ -45,6 +45,46 @@ class StreamlitAppTests(unittest.TestCase):
             finally:
                 artifacts.ARTIFACT_ROOT = original_root
 
+    def test_diagnostic_fly_window_and_reopen_workflow(self):
+        with tempfile.TemporaryDirectory(prefix="amca-streamlit-diag-test-") as temp:
+            original_root = artifacts.ARTIFACT_ROOT
+            artifacts.ARTIFACT_ROOT = Path(temp)
+            try:
+                app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
+                self.assertFalse(app.exception, [item.message for item in app.exception])
+                self.assertIsNone(app.session_state["active_error_dialog"])
+                self.assertIsNone(app.session_state["last_error_report"])
+
+                # Input invalid YAML to trigger validation diagnostics
+                app.text_area[1].input("invalid_yaml: [broken flow sequence").run()
+                app.button[2].click().run()
+
+                diag_btns = [b for b in app.button if "Diagnosa Masalah Validasi" in b.label]
+                self.assertEqual(len(diag_btns), 1)
+
+                # Click diagnosis button to open fly-window dialog
+                diag_btns[0].click().run()
+                self.assertIsNotNone(app.session_state["active_error_dialog"])
+                report = app.session_state["active_error_dialog"]
+                self.assertEqual(report.origin.value, "user_input_flow")
+                self.assertIn("YAML", report.headline)
+
+                # Close dialog via Tutup Jendela button
+                close_btns = [b for b in app.button if b.label == "Tutup Jendela"]
+                self.assertEqual(len(close_btns), 1)
+                close_btns[0].click().run()
+                self.assertIsNone(app.session_state["active_error_dialog"])
+                self.assertIsNotNone(app.session_state["last_error_report"])
+
+                # Re-open dialog via persistent sidebar button
+                reopen_btns = [b for b in app.sidebar.button if "Buka Jendela Diagnostik" in b.label]
+                self.assertEqual(len(reopen_btns), 1)
+                reopen_btns[0].click().run()
+                self.assertIsNotNone(app.session_state["active_error_dialog"])
+                self.assertEqual(app.session_state["active_error_dialog"].headline, report.headline)
+            finally:
+                artifacts.ARTIFACT_ROOT = original_root
+
 
 if __name__ == "__main__":
     unittest.main()

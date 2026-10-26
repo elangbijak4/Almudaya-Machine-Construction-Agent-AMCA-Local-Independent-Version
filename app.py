@@ -34,6 +34,12 @@ from amca_agent.custom_components import (
     register_custom_component,
     unregister_custom_component,
 )
+from amca_agent.diagnostics import (
+    DiagnosticReport,
+    ErrorOrigin,
+    diagnose_exception,
+    format_diagnostic_report_for_markdown,
+)
 from amca_agent.formal_verifier import verify_formal_spec
 from amca_agent.graph import to_dot
 from amca_agent.hardware import (
@@ -99,6 +105,8 @@ def _init() -> None:
     st.session_state.setdefault("construction_approval", None)
     st.session_state.setdefault("last_package_result", None)
     st.session_state.setdefault("discovered_models", [])
+    st.session_state.setdefault("active_error_dialog", None)
+    st.session_state.setdefault("last_error_report", None)
 
 
 def _validate(yaml_text: str, previous_yaml: str | None = None) -> tuple[Any | None, Any | None, Any | None, str | None]:
@@ -172,8 +180,53 @@ def _record_version(source: str) -> None:
     )
 
 
+if hasattr(st, "dialog"):
+    @st.dialog("🔍 Pemberitahuan Diagnostik Kesalahan", width="large")
+    def _show_error_fly_window(report: DiagnosticReport) -> None:
+        origin_color = {
+            ErrorOrigin.EXTERNAL_SERVICE: "#E65100",  # Amber / Orange
+            ErrorOrigin.USER_INPUT_FLOW: "#0277BD",   # Ocean Blue
+            ErrorOrigin.CORE_SYSTEM: "#C62828",       # Crimson Red
+        }.get(report.origin, "#37474F")
+
+        st.markdown(
+            f"<div style='background-color: {origin_color}; color: white; padding: 6px 14px; "
+            f"border-radius: 6px; font-weight: bold; display: inline-block; margin-bottom: 12px; font-size: 0.95rem;'>"
+            f"{report.origin_icon} {report.origin_label}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        st.subheader(report.headline)
+        st.write(report.explanation)
+
+        st.markdown("#### 💡 Langkah Penyelesaian yang Disarankan:")
+        for idx, step in enumerate(report.remediation_steps, 1):
+            st.markdown(f"**{idx}.** {step}")
+
+        with st.expander("🔍 Rincian Diagnostik Teknis (Klik untuk memperluas)", expanded=False):
+            if report.context:
+                st.markdown(f"**Konteks Operasi**: `{report.context}`")
+            if report.raw_message:
+                st.markdown(f"**Pesan Mentah Sistem**:\n```\n{report.raw_message}\n```")
+            if report.technical_details:
+                st.markdown("**Detail Teknis Tambahan**:")
+                st.json(report.technical_details)
+
+        col_c1, col_c2 = st.columns([4, 1])
+        with col_c2:
+            if st.button("Tutup Jendela", key="btn_close_error_modal", type="primary"):
+                st.session_state.active_error_dialog = None
+                st.rerun()
+else:
+    def _show_error_fly_window(report: DiagnosticReport) -> None:
+        st.error(f"{report.origin_icon} [{report.origin_label}] {report.headline}: {report.explanation}")
+
+
 _init()
 harness: AgentHarnessSession = st.session_state.harness
+
+if st.session_state.get("active_error_dialog") is not None:
+    _show_error_fly_window(st.session_state["active_error_dialog"])
 
 with st.sidebar:
     st.header("Pengaturan Agent Harness")
@@ -199,8 +252,11 @@ with st.sidebar:
             try:
                 st.session_state.discovered_models = discover_provider_models("9router", base_url=base_url)
                 st.success(f"Ditemukan {len(st.session_state.discovered_models)} model/Combo.")
-            except ProviderError as exc:
-                st.warning(str(exc))
+            except Exception as exc:
+                rep = diagnose_exception(exc, context="Pindai Model & Combo 9Router")
+                st.session_state.active_error_dialog = rep
+                st.session_state.last_error_report = rep
+                st.rerun()
 
         combos_avail = st_9r.get("combos", [])
         discovered = st.session_state.discovered_models or []
@@ -254,8 +310,11 @@ with st.sidebar:
             try:
                 st.session_state.discovered_models = discover_provider_models(provider, base_url=base_url)
                 st.success(f"Ditemukan {len(st.session_state.discovered_models)} model.")
-            except ProviderError as exc:
-                st.warning(str(exc))
+            except Exception as exc:
+                rep = diagnose_exception(exc, context=f"Pindai Model {provider}")
+                st.session_state.active_error_dialog = rep
+                st.session_state.last_error_report = rep
+                st.rerun()
 
         local_models = st_rt.get("models") or st.session_state.discovered_models or []
         if local_models:
@@ -357,6 +416,13 @@ with st.sidebar:
                 st.session_state.dot = to_dot(candidate) if candidate and verification.status == "verified" else None
             st.rerun()
     st.caption(f"Session ID: `{st.session_state.session_id[:8]}`")
+    if st.session_state.get("last_error_report") is not None:
+        rep = st.session_state["last_error_report"]
+        st.divider()
+        st.caption(f"Status Diagnostik: {rep.origin_icon} {rep.origin_label}")
+        if st.button("🔍 Buka Jendela Diagnostik", key="btn_reopen_diag_sidebar"):
+            st.session_state.active_error_dialog = rep
+            st.rerun()
 
 example_files = sorted((ROOT / "examples").glob("*.yaml"))
 example_map = {f"{p.stem} — {p.name}": p for p in example_files}
@@ -392,7 +458,13 @@ with left:
         request = st.session_state.problem.strip()
         intent_check = classify_intent(request)
         if not intent_check.allowed:
-            st.warning(intent_check.boundary_message or intent_check.reason)
+            rep = diagnose_exception(
+                f"out-of-scope: {intent_check.boundary_message or intent_check.reason}",
+                context="Klasifikasi Intent Permintaan Mesin",
+            )
+            st.session_state.active_error_dialog = rep
+            st.session_state.last_error_report = rep
+            st.rerun()
         else:
             st.session_state.messages.append({"role": "user", "content": request})
             try:
@@ -413,9 +485,13 @@ with left:
                 )
                 _record_version("agent")
                 st.rerun()
-            except (ProviderError, PermissionError) as exc:
-                st.error(str(exc))
-                st.session_state.messages.pop()
+            except Exception as exc:
+                if st.session_state.messages:
+                    st.session_state.messages.pop()
+                rep = diagnose_exception(exc, context="Buat YAML dengan Agent")
+                st.session_state.active_error_dialog = rep
+                st.session_state.last_error_report = rep
+                st.rerun()
     st.subheader("2 · Revisi lewat chat")
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -452,9 +528,13 @@ with left:
                 )
                 _record_version("revision")
             st.rerun()
-        except (ProviderError, PermissionError) as exc:
-            st.error(str(exc))
-            st.session_state.messages.pop()
+        except Exception as exc:
+            if st.session_state.messages:
+                st.session_state.messages.pop()
+            rep = diagnose_exception(exc, context="Revisi YAML lewat Chat")
+            st.session_state.active_error_dialog = rep
+            st.session_state.last_error_report = rep
+            st.rerun()
 
 with right:
     st.subheader("3 · Tinjau, validasi struktural, & verifikasi formal")
@@ -489,7 +569,10 @@ with right:
                 _record_version("synthesis")
                 st.rerun()
             except Exception as exc:
-                st.error(f"Sintesis komponen gagal: {exc}")
+                rep = diagnose_exception(exc, context="Sintesis Komponen On-The-Fly")
+                st.session_state.active_error_dialog = rep
+                st.session_state.last_error_report = rep
+                st.rerun()
     if st.session_state.verification is not None:
         status = st.session_state.verification.status
         (st.success if status == "verified" else st.error)(f"Validasi AMCA: {status.upper()}")
@@ -508,6 +591,17 @@ with right:
     elif st.session_state.verification and st.session_state.verification.reasons:
         for reason in st.session_state.verification.reasons:
             st.warning(f"{reason.code}: {reason.message}")
+    has_valid_failure = bool(
+        st.session_state.validation_error
+        or (st.session_state.verification and st.session_state.verification.status != "verified")
+    )
+    if has_valid_failure:
+        v_err_msg = st.session_state.validation_error or "; ".join(r.message for r in st.session_state.verification.reasons)
+        if st.button("🔍 Diagnosa Masalah Validasi (Buka Jendela Diagnostik)", key="btn_diag_val_fail"):
+            rep = diagnose_exception(v_err_msg, context="Validasi Spesifikasi YAML")
+            st.session_state.active_error_dialog = rep
+            st.session_state.last_error_report = rep
+            st.rerun()
     if st.session_state.versions:
         labels = [
             f"v{i} · {v['source']} · {v['validation_status']} · formal:{v.get('formal_status', '-')}"
@@ -564,8 +658,11 @@ else:
             st.session_state.last_artifact = str(folder)
             st.session_state.last_execution = record
             st.rerun()
-        except (AMCAError, ValueError, json.JSONDecodeError) as exc:
-            st.error(f"Input JSON tidak valid: {exc}")
+        except (AMCAError, ValueError, json.JSONDecodeError, Exception) as exc:
+            rep = diagnose_exception(exc, context="Eksekusi Runtime Mesin")
+            st.session_state.active_error_dialog = rep
+            st.session_state.last_error_report = rep
+            st.rerun()
 
 if "last_execution" in st.session_state:
     st.subheader("Hasil execution record")
@@ -633,7 +730,10 @@ if (
                     )
                     st.session_state.last_package_result = pkg_res
                 except Exception as exc:
-                    st.error(f"Konstruksi gagal: {exc}")
+                    rep = diagnose_exception(exc, context="Konstruksi & Packaging Proyek Mandiri")
+                    st.session_state.active_error_dialog = rep
+                    st.session_state.last_error_report = rep
+                    st.rerun()
 
         if st.session_state.last_package_result is not None:
             pkg = st.session_state.last_package_result
@@ -764,7 +864,10 @@ with st.expander("🧩 Buat & Daftarkan Komponen Baru atau Kelola Komponen Kusto
                     )
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"Gagal mendaftarkan komponen: {getattr(exc, 'message', str(exc))}")
+                    rep = diagnose_exception(exc, context="Pendaftaran Komponen Kustom")
+                    st.session_state.active_error_dialog = rep
+                    st.session_state.last_error_report = rep
+                    st.rerun()
         with btn_col2:
             if st.button("Draft Otomatis dari Deskripsi Peran", key="btn_draft_cc"):
                 try:
@@ -779,7 +882,10 @@ with st.expander("🧩 Buat & Daftarkan Komponen Baru atau Kelola Komponen Kusto
                     )
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"Gagal membuat draft komponen: {getattr(exc, 'message', str(exc))}")
+                    rep = diagnose_exception(exc, context="Draft Otomatis Komponen Kustom")
+                    st.session_state.active_error_dialog = rep
+                    st.session_state.last_error_report = rep
+                    st.rerun()
 
     with tab_external:
         st.markdown(
@@ -830,7 +936,10 @@ with st.expander("🧩 Buat & Daftarkan Komponen Baru atau Kelola Komponen Kusto
                 })
                 st.rerun()
             except Exception as exc:
-                st.error(f"Pengikatan komponen ditolak: {getattr(exc, 'message', str(exc))}")
+                rep = diagnose_exception(exc, context="Pengikatan Komponen Python Eksternal")
+                st.session_state.active_error_dialog = rep
+                st.session_state.last_error_report = rep
+                st.rerun()
 
     custom_list = list_custom_component_specs()
     if custom_list:

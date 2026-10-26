@@ -1,6 +1,6 @@
 # AMCA User Guide (Panduan Operasional Pengguna — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.4.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, dan Dashboard Dinamis Adaptif `v0.4.0`) · **Bahasa:** Indonesia  
+**Versi Dokumen:** `0.5.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, Dashboard Dinamis Adaptif `v0.4.0`, dan Sistem Penanganan Error Terpadu & Diagnostik `v0.5.0`) · **Bahasa:** Indonesia  
 **Peran Dokumen:** Panduan praktis bagi peneliti dan perekayasa perangkat lunak untuk mengoperasikan AMCA Versi Lokal Mandiri sehari-hari, sekaligus acuan verifikasi fungsional (*Functional Verification Reference*).
 
 ---
@@ -129,4 +129,31 @@ Setelah Approval A dan Approval B aktif, jalankan **Bangun Proyek (`construct`)*
 2. **Verifikasi Formal Stage 3 (`verify_code_refinement`)**: AMCA mem-parsing AST kode Python yang baru dibuat menggunakan `ast.parse()` untuk membuktikan secara matematis bahwa graf aliran data di dalam kode Python **isomorfik (identik secara struktural)** dengan spesifikasi YAML ($G_{\text{code}} \cong G_{\text{yaml}}$).
 3. **Eksekusi Pengujian Nyata**: AMCA menjalankan `compileall` dan suite `unittest` asli milik proyek yang dihasilkan.
 4. **Pengemasan Handover ZIP Mandiri**: Seluruh kode mesin, tes unit, pustaka kumulatif `src/amca_components/` (beserta `catalog.json`, `contracts.py`, `builtin.py`, dan modul `custom/`), `machine.yaml`, `formal-proof-certificate.json`, `machine-dag.dot`, `README.md`, dan log audit dikemas ke dalam **`<machine_id>-rev<NNN>-handover.zip`** yang siap diekstrak dan dijalankan secara mandiri di mana pun.
+
+---
+
+## 6. Langkah 7: Memahami & Menyelesaikan Kesalahan dengan Jendela Mengambang Diagnostik (*Fly-Window Modal*)
+
+Ketika terjadi kendala operasional, sintaksis, atau koneksi AI, AMCA tidak menampilkan pesan merah mentah yang membingungkan. AMCA menampilkan **Jendela Mengambang Diagnostik (*Fly-Window Modal Overlay*)** yang secara otomatis mengklasifikasikan sumber masalah ke dalam salah satu dari tiga asal:
+
+### 6.1 Mengenali 3 Asal Kesalahan
+
+1. **🌐 Layanan Eksternal / Gateway AI (`EXTERNAL_SERVICE`)**:
+   - **Tanda**: Badge berwarna oranye.
+   - **Penyebab**: Kegagalan koneksi ke penyedia AI, gateway 9Router lokal belum memiliki kredensial provider aktif (HTTP 404), kuota akun habis / rate-limit (HTTP 429), API Key salah/kedaluwarsa (HTTP 401), atau token overflow.
+   - **Solusi**: Ikuti tautan langsung yang tertera di jendela dialog (misalnya membuka dashboard [http://localhost:20128](http://localhost:20128) untuk menghubungkan akun AI), atau beralih ke provider lokal/offline.
+2. **📝 Alur Masukan / Spesifikasi Riset (`USER_INPUT_FLOW`)**:
+   - **Tanda**: Badge berwarna biru laut.
+   - **Penyebab**: Format dokumen YAML tidak valid, port masukan tidak cocok dengan port luaran, pelanggaran kontrak Hoare (misalnya masukan kosong dikirim ke node yang mensyaratkan teks bersih), impor kode Python berbahaya yang ditolak oleh Gerbang Keamanan AST, atau prompt yang di luar cakupan (*out-of-scope*).
+   - **Solusi**: Ikuti saran perbaikan spesifikasi yang tertera, sisipkan komponen pembersih teks (`validate_text`), atau hapus pustaka berbahaya dari kode komponen.
+3. **⚙️ Sistem Inti AMCA (`CORE_SYSTEM`)**:
+   - **Tanda**: Badge berwarna merah tua.
+   - **Penyebab**: Masalah sistem lokal di laptop Anda, seperti izin penulisan berkas pada folder `artifacts/` atau ruang penyimpanan disk yang penuh.
+   - **Solusi**: Periksa izin direktori atau bersihkan ruang penyimpanan laptop Anda.
+
+### 6.2 Menutup dan Membuka Kembali Jendela Diagnostik
+
+- **Menutup Dialog**: Klik tombol **Tutup Jendela** pada bagian bawah jendela mengambang untuk kembali ke editor atau draf kerja Anda.
+- **Membuka Kembali (*Re-open*)**: Jika Anda telah menutup dialog namun ingin membaca kembali instruksi solusi atau rincian teknis, klik tombol **🔍 Buka Jendela Diagnostik** yang selalu tersedia di bagian bawah Sidebar Pengaturan.
+
 

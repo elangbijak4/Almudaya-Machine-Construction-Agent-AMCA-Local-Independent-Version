@@ -33,6 +33,7 @@ from amca_agent.custom_components import (
     register_custom_component,
     unregister_custom_component,
 )
+from amca_agent.diagnostics import diagnose_exception, format_diagnostic_report_for_cli
 from amca_agent.formal_verifier import verify_specification_formal
 from amca_agent.graph import to_dot
 from amca_agent.hardware import (
@@ -867,7 +868,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "chat":
             return _chat(args)
     except (AMCAError, ProviderError, PermissionError, RuntimeError, OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        report = diagnose_exception(exc, context=f"CLI {getattr(args, 'command', '')}")
         print(f"amca-agent: {getattr(exc, 'message', str(exc))}", file=sys.stderr)
+        print(format_diagnostic_report_for_cli(report), file=sys.stderr)
         return 2
     return 0
 

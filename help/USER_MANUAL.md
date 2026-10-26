@@ -1,6 +1,6 @@
 # AMCA User Manual (Rincian Teknis & Acuan Verifikasi Sistem — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.4.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, dan Dashboard Dinamis Adaptif `v0.4.0`)  
+**Versi Dokumen:** `0.5.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, Dashboard Dinamis Adaptif `v0.4.0`, dan Sistem Penanganan Error Terpadu & Diagnostik `v0.5.0`)  
 **Bahasa:** Indonesia  
 **Status:** Kontrak Referensi Teknis & Orakel Verifikasi Implementasi (*Verification Oracle*)
 
@@ -332,3 +332,60 @@ Saat aplikasi selesai dibangun, verifikator wajib mencentang seluruh butir berik
 - [x] **VO-07**: Pustaka Komponen Kumulatif `amca_components` aktif di `src/amca_components/`, seluruh kode mesin nyata (`pipeline.py`) memanggil fungsi komponen secara langsung sebagai pustaka (`from amca_components import ...`), dan direktori pustaka ikut dibundel utuh ke dalam Handover ZIP.
 - [x] **VO-08**: Gerbang Keamanan AST Statis (`component_binder.py`) memblokir modul berbahaya (`os`, `subprocess`, `socket`) secara fail-closed, membungkus fungsi Python eksternal dengan kontrak Hoare kanonis, memvalidasi perilakunya di sandbox, dan mendaftarkannya ke `catalog.json`.
 - [x] **VO-09**: Sintesis Komponen *On-The-Fly* (`component_synthesizer.py`) mendeduksi prasyarat/pascakondisi Hoare melalui propagasi batasan dua arah pada DAG, meminta persetujuan pengguna (HITL), mensintesis kode komponen baru secara dinamis, mengikatnya ke pustaka, serta memverifikasi ulang kandidat hingga mencapai status `verified` dan `PROVED` (Stage 1, 2, dan 3).
+- [x] **VO-10**: Modul Diagnostik Inti (`src/amca_agent/diagnostics.py`) secara akurat mengklasifikasikan setiap eksepsi/kegagalan ke dalam 3 asal terpisah: Layanan Eksternal/Gateway (`EXTERNAL_SERVICE`), Alur Masukan/Spesifikasi Riset (`USER_INPUT_FLOW`), dan Sistem Inti AMCA (`CORE_SYSTEM`) berdasarkan atribut otentik objek eksepsi (zero-mocking).
+- [x] **VO-11**: Antarmuka GUI Streamlit (`app.py`) menyajikan jendela mengambang diagnostik (*fly-window modal overlay* `@st.dialog`) dengan badge kategori berwarna, judul bahasa manusia, penjelasan penyebab ilmiah, instruksi solusi terarah, expander rincian teknis, tombol penutup jendela, dan tombol pembuka ulang (*re-open*) di sidebar tanpa menggeser indeks pohon widget normal.
+
+---
+
+## 13. Spesifikasi Sistem Diagnostik Error Terintegrasi & Jendela Mengambang (Fly-Window Modal)
+
+### 13.1 Taksonomi 3 Kategori Asal Error (*Tri-Origin Error Taxonomy*)
+
+Untuk mencegah kebingungan peneliti dan menghindari kesalahpahaman intent riset, seluruh kesalahan yang terjadi di AMCA dipetakan ke dalam tiga kategori asal yang tidak saling tumpang tindih:
+
+```
+                            ┌──────────────────────────────────────────────┐
+                            │    DIAGNOSTIK KESALAHAN SISTEM AMCA v0.5     │
+                            └──────────────────────┬───────────────────────┘
+                                                   │
+        ┌──────────────────────────────────────────┼──────────────────────────────────────────┐
+        ▼                                          ▼                                          ▼
+┌───────────────────────────────┐  ┌───────────────────────────────┐  ┌───────────────────────────────┐
+│     EXTERNAL_SERVICE (🌐)     │  │      USER_INPUT_FLOW (📝)     │  │        CORE_SYSTEM (⚙️)       │
+├───────────────────────────────┤  ├───────────────────────────────┤  ├───────────────────────────────┤
+│ • 9Router Gateway 404 (Tanpa  │  │ • Kesalahan Sintaksis/Skema   │  │ • Kegagalan I/O Disk Lokal /  │
+│   Akun Provider Terhubung)    │  │   YAML (Port, Tipe Data, DAG) │  │   Izin Tulis Berkas Artefak   │
+│ • API Key Ditolak (HTTP 401)  │  │ • Pelanggaran Kontrak Hoare   │  │ • Disk Penuh Saat Eksekusi    │
+│ • Rate Limit / Kuota (HTTP 429│  │   (Precondition/Postcondition)│  │   atau Kompilasi Proyek       │
+│ • Context / Token Overflow    │  │ • Penolakan Gerbang AST       │  │ • Pengecualian Tak Terduga    │
+│ • Port Unreachable / Jaringan │  │ • Intent Out-of-Scope         │  │   pada Logika Internal AMCA   │
+└───────────────────────────────┘  └───────────────────────────────┘  └───────────────────────────────┘
+```
+
+1. **`EXTERNAL_SERVICE` (🌐 Layanan Eksternal / Gateway AI)**:
+   - Kesalahan yang bersumber dari infrastruktur jaringan atau penyedia model AI di luar kendali langsung spesifikasi AMCA.
+   - Contoh kasus: 9Router mengembalikan HTTP 404 `No active credentials for provider: <name>`, OpenAI/Gemini mengembalikan HTTP 401 `unauthorized`, Google Cloud mengembalikan HTTP 429 `RESOURCE_EXHAUSTED`, atau koneksi port `20128`/`11434` terputus.
+   - Solusi otomatis: Menyediakan instruksi konkret menghubungkan akun di dashboard [http://localhost:20128](http://localhost:20128), beralih ke AMCA Combo, atau menggunakan runtime lokal/offline.
+2. **`USER_INPUT_FLOW` (📝 Alur Masukan / Spesifikasi Riset)**:
+   - Kesalahan yang bersumber dari spesifikasi mesin, konfigurasi port, atau pelanggaran kontrak logika matematika.
+   - Contoh kasus: YAML broken syntax/sequence, port sumber `object` dihubungkan ke port penerima bertipe `string` tanpa konverter, komponen `analysis_a` menerima teks kosong yang melanggar prasyarat Hoare `non_empty_trimmed`, komponen Python eksternal memuat impor berbahaya (`import os`) yang ditolak AST Gate, atau prompt di luar cakupan (*out-of-scope*).
+   - Solusi otomatis: Memberikan rekomendasi perbaikan spesifikasi, menyisipkan komponen pembersih seperti `validate_text`, atau menghapus pustaka berbahaya.
+3. **`CORE_SYSTEM` (⚙️ Sistem Inti AMCA)**:
+   - Kesalahan operasional internal pada perangkat keras/sistem berkas laptop peneliti.
+   - Contoh kasus: `PermissionError` saat menulis direktori `artifacts/constructed_projects/`, kehabisan ruang disk, atau kegagalan internal mesin.
+   - Solusi otomatis: Panduan memeriksa izin direktori dan ruang disk laptop.
+
+### 13.2 Jendela Mengambang Diagnostik (*Fly-Window Modal Dialog* `@st.dialog`)
+
+Di antarmuka GUI Streamlit (`app.py`), diagnostik disajikan menggunakan modal dialog elegan yang tidak tenggelam di antara widget lainnya:
+- **Badge Status Berwarna**: Oranye untuk Layanan Eksternal, Biru Laut untuk Alur Masukan, dan Merah Tua untuk Sistem Inti.
+- **Judul Lugas Bahasa Manusia**: Judul eksplisit yang langsung menjawab "apa yang terjadi" tanpa jargon yang membingungkan.
+- **Penjelasan Ilmiah**: Deskripsi rinci penyebab kesalahan.
+- **Langkah Solusi Terarah (*Actionable Steps*)**: Panduan bernomor langkah demi langkah untuk menyelesaikan kendala.
+- **Expander Rincian Teknis**: Berisi konteks operasi, kode status HTTP, pesan asli sistem, dan *stack trace* untuk kebutuhan reproduksi teknis.
+- **Tombol Penutup & Pembuka Ulang**: Tombol "Tutup Jendela" mereset state dialog, sementara tombol "🔍 Buka Jendela Diagnostik" di sidebar memungkinkan peneliti membuka kembali laporan kapan saja tanpa kehilangan data kerja.
+
+### 13.3 Pelaporan Terminal Berstruktur pada CLI
+
+Di antarmuka CLI (`amca_agent.cli`), diagnostik diformat menggunakan pembatas ANSI terstruktur yang memuat banner kategori, ringkasan masalah, penjelasan, dan langkah solusi bernomor.
+

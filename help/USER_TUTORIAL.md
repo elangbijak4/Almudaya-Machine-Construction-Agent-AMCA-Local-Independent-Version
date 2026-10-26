@@ -1,6 +1,6 @@
 # AMCA User Tutorial (Tutorial Praktik Langkah-demi-Langkah & Skenario Verifikasi — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.4.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, dan Dashboard Dinamis Adaptif `v0.4.0`) · **Bahasa:** Indonesia  
+**Versi Dokumen:** `0.5.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, Pustaka Komponen Kumulatif `v0.3.0`, Dashboard Dinamis Adaptif `v0.4.0`, dan Sistem Penanganan Error Terpadu & Diagnostik `v0.5.0`) · **Bahasa:** Indonesia  
 **Peran Dokumen:** Panduan *hands-on* langkah demi langkah dari tingkat dasar hingga tingkat lanjut (9Router/Combo Fallback, Hardware Gate, Subworker HITL, 3-Stage Formal Verification, Pustaka Komponen Kumulatif, Pengikatan Komponen Eksternal, Sintesis On-The-Fly Code Agent, dan Handover ZIP), sekaligus skenario uji terima (*Acceptance Test Scenarios*) saat verifikasi aplikasi Versi Lokal Mandiri.
 
 ---
@@ -281,6 +281,62 @@ amca> construct
   - Verifikasi Stage 3 ($G_{\text{code}} \cong G_{\text{yaml}}$) berstatus **`PROVED`**.
   - Berkas `pipeline.py` memanggil `from amca_components import run_input_source, run_line_counter, run_generate_report`.
   - Arsip Handover ZIP berhasil dibuat dan siap diunduh!
+
+---
+
+## Tutorial 8: Menguji Sistem Penanganan Error Terpadu & Jendela Mengambang (Fly-Window Modal)
+
+Tutorial ini mendemonstrasikan bagaimana AMCA secara cerdas mengisolasi, mendiagnosis, dan menyajikan solusi untuk 3 jenis kesalahan yang berbeda secara visual di GUI maupun di CLI.
+
+### Skenario A: Uji Kesalahan Layanan Eksternal / Gateway AI (`EXTERNAL_SERVICE`)
+1. Di GUI (`app.py`), pilih provider **9Router**.
+2. Masukkan model yang belum terhubung di 9Router Anda (misalnya `alicode-intl/qwen3.5-plus`).
+3. Masukkan prompt permintaan dan klik **Buat YAML dengan agent**.
+4. **Hasil yang Wajib Terverifikasi**:
+   - Muncul jendela mengambang diagnostik (*Fly-Window Modal*) dengan badge oranye `🌐 Layanan Eksternal / Gateway AI`.
+   - Judul: **9Router Belum Memiliki Akun Penyedia AI yang Terhubung**.
+   - Penjelasan menerangkan bahwa gateway 9Router aktif di port 20128, namun menolak permintaan karena akun penyedia belum aktif di dashboard 9Router.
+   - Tersedia tautan langsung ke [http://localhost:20128](http://localhost:20128) menu **Providers**.
+   - Klik **Tutup Jendela** $\to$ modal tertutup tanpa menghilangkan teks prompt atau state sesi.
+   - Di sidebar bawah, muncul tombol **🔍 Buka Jendela Diagnostik** yang dapat diklik untuk membuka kembali laporan.
+
+### Skenario B: Uji Kesalahan Alur Masukan / Spesifikasi Riset (`USER_INPUT_FLOW`)
+1. Di editor YAML GUI (Bagian 3), masukkan teks yang melanggar sintaksis:
+   ```yaml
+   broken_yaml: [tidak ada penutup kurung
+   ```
+2. Klik tombol **Validasi YAML saat ini**.
+3. Di bawah pesan error merah, klik tombol **🔍 Diagnosa Masalah Validasi (Buka Jendela Diagnostik)**.
+4. **Hasil yang Wajib Terverifikasi**:
+   - Muncul jendela mengambang diagnostik dengan badge biru laut `📝 Alur Masukan / Spesifikasi Riset`.
+   - Judul: **Spesifikasi YAML Melanggar Skema atau Topologi Graf**.
+   - Solusi menyarankan memeriksa sintaksis YAML atau meninjau diagram graf.
+
+### Skenario C: Uji Kesalahan Gerbang Keamanan AST Statis (`USER_INPUT_FLOW`)
+1. Di Bagian 8 (Custom Component Studio) $\to$ tab **🔗 Ikat File Python (.py) dari Luar**.
+2. Masukkan kode Python yang memuat pustaka berbahaya:
+   ```python
+   import os
+
+   def bad_func(text: str) -> str:
+       return os.name
+   ```
+3. Klik tombol **Audit AST, Uji Kontrak Hoare & Ikat ke Library AMCA**.
+4. **Hasil yang Wajib Terverifikasi**:
+   - Muncul jendela mengambang diagnostik dengan badge biru laut `📝 Alur Masukan / Spesifikasi Riset`.
+   - Judul: **Kode Komponen Ditolak oleh Gerbang Keamanan AST Statis**.
+   - Penjelasan menerangkan bahwa modul `os` dilarang demi keamanan eksekusi lokal.
+   - Solusi memandu pengguna untuk hanya menggunakan fungsi deterministik murni (`re`, `json`, `math`).
+
+### Skenario D: Uji Diagnostik Terstruktur pada Terminal CLI
+Jalankan perintah pengujian CLI di PowerShell:
+```powershell
+$PY = ".\.venv\Scripts\python.exe"
+& $PY -m amca_agent.cli run examples/invalid_missing_dependency.yaml --inputs examples/reference-input.json
+```
+- **Hasil yang Wajib Terverifikasi**:
+  - Terminal menampilkan blok berstruktur `[DIAGNOSTIK KESALAHAN AMCA — ASAL: ...]` yang menerangkan secara jelas bahwa spesifikasi ditolak karena dependensi tidak lengkap sebelum menyentuh runtime.
+
 
 
 
