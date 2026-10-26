@@ -10,7 +10,7 @@ from amca_agent.hardware import (
     HostHardwareSnapshot,
     evaluate_local_model_eligibility,
 )
-from amca_agent.provider import ProviderError, generate_yaml
+from amca_agent.provider import ProviderError, complete_text, generate_yaml, is_offline_provider
 
 SUPPORTED_PROVIDER_TYPES: tuple[str, ...] = (
     "gemini",
@@ -482,6 +482,79 @@ class AgentHarnessSession:
         if last_error is not None:
             raise last_error
         raise ProviderError("Rantai fallback Combo tidak memiliki tier yang berhasil.")
+
+    def has_llm_transport(self) -> bool:
+        """Return True when the primary binding (or any Combo tier) points to a real LLM provider."""
+        binding = self.primary_binding
+        if binding.provider_type.strip().lower() in {"amca_combo", "combo"}:
+            chain = self.combo_chains.get(binding.model_id)
+            return bool(chain) and any(not is_offline_provider(t.provider_type) for t in chain.tiers)
+        return not is_offline_provider(binding.provider_type)
+
+    def execute_text_completion(
+        self,
+        system_prompt: str,
+        user_content: str,
+        *,
+        agent_role: str = "amca_code_agent",
+    ) -> str:
+        """Run a raw system+user completion via the Primary binding or its Combo fallback chain.
+
+        Used by the On-The-Fly Code Agent. Applies the same fallback triggers as YAML generation
+        and compacts `user_content` on token-limit triggers.
+        """
+        binding = self.primary_binding
+        if binding.provider_type.strip().lower() in {"amca_combo", "combo"}:
+            chain = self.combo_chains.get(binding.model_id)
+            if not chain:
+                raise ProviderError(f"Combo fallback chain {binding.model_id!r} belum terdaftar.")
+            tiers: tuple[ModelBinding, ...] = chain.tiers
+            combo_id = chain.combo_id
+        else:
+            tiers = (binding,)
+            combo_id = "single"
+
+        active_content = user_content
+        last_error: ProviderError | None = None
+        for idx, tier in enumerate(tiers, 1):
+            try:
+                return complete_text(
+                    provider=tier.provider_type,
+                    model=tier.model_id,
+                    api_key=self.vault.get_key(tier.agent_role),
+                    system_prompt=system_prompt,
+                    user_content=active_content,
+                    base_url=tier.base_url,
+                )
+            except ProviderError as exc:
+                last_error = exc
+                trigger = exc.trigger_reason or "upstream_unavailable"
+                compacted = False
+                if trigger in {"token_limit_exceeded", "output_truncated_length"}:
+                    active_content = active_content[:4_000]
+                    compacted = True
+                if idx < len(tiers):
+                    next_tier = tiers[idx]
+                    self.fallback_events.append(
+                        FallbackTransitionEvent(
+                            combo_id=combo_id,
+                            agent_role=agent_role,
+                            from_tier=idx,
+                            from_provider=tier.provider_type,
+                            from_model=tier.model_id,
+                            to_tier=idx + 1,
+                            to_provider=next_tier.provider_type,
+                            to_model=next_tier.model_id,
+                            trigger_reason=trigger,
+                            context_compacted=compacted,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                        )
+                    )
+                    continue
+                raise
+        if last_error is not None:
+            raise last_error
+        raise ProviderError("Tidak ada tier model yang tersedia untuk Code Agent.")
 
     def audit_metadata(self) -> dict[str, Any]:
         """Return non-secret metadata suitable for session.json and construction-log.jsonl."""

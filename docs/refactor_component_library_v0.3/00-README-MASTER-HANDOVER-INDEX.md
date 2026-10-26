@@ -58,15 +58,15 @@ Sebelum memulai atau melanjutkan fase mana pun, model penerus wajib memperhatika
 
 Jika Anda adalah model yang melanjutkan pekerjaan ini, periksa keberadaan file di bawah ini untuk mengetahui fase mana yang sedang berjalan:
 
-- [ ] **Fase RF-01 (Library Komponen Kumulatif `src/amca_components/`)** — Detail di `01-PHASE-RF01-PERSISTENT-COMPONENT-LIBRARY.md`
+- [x] **Fase RF-01 (Library Komponen Kumulatif `src/amca_components/`)** — Detail di `01-PHASE-RF01-PERSISTENT-COMPONENT-LIBRARY.md` (SELESAI — Lihat `PROGRESS_LOG.md`)
   - Target file baru: `src/amca_components/__init__.py`, `src/amca_components/contracts.py`, `src/amca_components/builtin.py`, `src/amca_components/loader.py`, `src/amca_components/custom/__init__.py`
   - Target modifikasi: `src/amca_agent/builder.py`, `src/amca_agent/formal_verifier.py`, `src/amca_agent/packager.py`
-- [ ] **Fase RF-02 (Audit AST & Pengikatan Komponen Eksternal dari Antigravity/OpenCode/Codex)** — Detail di `02-PHASE-RF02-AST-SECURITY-GATE-AND-EXTERNAL-BINDING.md`
+- [x] **Fase RF-02 (Audit AST & Pengikatan Komponen Eksternal dari Antigravity/OpenCode/Codex)** — Detail di `02-PHASE-RF02-AST-SECURITY-GATE-AND-EXTERNAL-BINDING.md` (SELESAI — Lihat `PROGRESS_LOG.md`)
   - Target file baru: `src/amca_agent/component_binder.py`
   - Target modifikasi: `src/amca_agent/custom_components.py`
-- [ ] **Fase RF-03 (Sintesis Kode Komponen *On-The-Fly* di Tengah Alur YAML)** — Detail di `03-PHASE-RF03-ON-THE-FLY-CODE-AGENT-COMPONENT-SYNTHESIS.md`
+- [x] **Fase RF-03 (Sintesis Kode Komponen *On-The-Fly* di Tengah Alur YAML)** — Detail di `03-PHASE-RF03-ON-THE-FLY-CODE-AGENT-COMPONENT-SYNTHESIS.md` (SELESAI — Lihat `PROGRESS_LOG.md`)
   - Target file baru: `src/amca_agent/component_synthesizer.py`
   - Target modifikasi: `src/amca_agent/provider.py`, `src/amca_agent/harness.py`
-- [ ] **Fase RF-04 (Integrasi GUI/CLI, Pengujian Tanpa Mocking, & Buku Panduan)** — Detail di `04-PHASE-RF04-UI-CLI-TESTS-AND-DOCUMENTATION-SYNC.md`
-  - Target modifikasi: `app.py`, `src/amca_agent/cli.py`, `help/USER_MANUAL.md`, `help/USER_GUIDE.md`, `help/USER_TUTORIAL.md`
+- [x] **Fase RF-04 (Integrasi GUI/CLI, Pengujian Tanpa Mocking, & Buku Panduan)** — Detail di `04-PHASE-RF04-UI-CLI-TESTS-AND-DOCUMENTATION-SYNC.md` (SELESAI — Lihat `PROGRESS_LOG.md`)
+  - Target modifikasi: `app.py`, `src/amca_agent/cli.py`, `help/USER_MANUAL.md`, `help/USER_GUIDE.md`, `help/USER_TUTORIAL.md` (beserta salinan tanda hubung)
   - Target file pengujian baru: `tests/unit/test_component_library_and_binder.py`, `tests/integration/test_on_the_fly_component_flow.py`

@@ -1,6 +1,6 @@
 # AMCA User Guide (Panduan Operasional Pengguna — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.2.0` · **Bahasa:** Indonesia  
+**Versi Dokumen:** `0.3.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, dan Pustaka Komponen Kumulatif & On-The-Fly Code Agent `v0.3.0`) · **Bahasa:** Indonesia  
 **Peran Dokumen:** Panduan praktis bagi peneliti dan perekayasa perangkat lunak untuk mengoperasikan AMCA Versi Lokal Mandiri sehari-hari, sekaligus acuan verifikasi fungsional (*Functional Verification Reference*).
 
 ---
@@ -14,6 +14,8 @@ AMCA Versi Lokal Mandiri menyediakan dua antarmuka lokal (GUI & CLI) dengan kese
 | **Mengatur API Key, 9Router, Ollama, LM Studio, OpenCode, atau Model Lokal** | Panel **Preliminary Harness & Combo Setup** di Sidebar / Tab Konfigurasi Awal | `amca_agent.cli chat` (perintah `setup`), `discover-models`, `hardware-check` |
 | **Meracik Rantai Fallback Combo (Antisipasi Limit Token / Kuota)** | Tab **Combo & Fallback Chain Builder** (mirip 9Router Combos) | `amca_agent.cli combo-config` atau memilih `--provider nine_router --model <combo>` |
 | **Membuat Spesifikasi Mesin dari Bahasa Alami** | Kotak dialog *"Mesin/agent apakah yang Anda ingin buat?"* | `amca_agent.cli chat` |
+| **Sintesis Komponen On-The-Fly oleh Code Agent** | Kartu **Sintesis Komponen Baru On-The-Fly** di Bagian 3 (muncul otomatis jika ada komponen tak terdaftar) | `amca_agent.cli chat` (perintah `synthesize` / `approve-components`) atau `synthesize-missing <spec.yaml>` |
+| **Mengikat Komponen Eksternal (.py) dari Antigravity / OpenCode / Codex** | Tab **Ikat Berkas Komponen Eksternal (.py)** di Bagian 8 | `amca_agent.cli bind-component --source <file.py>` |
 | **Meninjau Bukti Formal 3-Tahap & Memperbaiki *Counterexample*** | Panel **Formal Proof Certificate** & tombol **Revisi Otomatis** | Perintah `validate`, `proof`, dan `revisi <instruksi>` |
 | **Menyetujui Spesifikasi (Approval A)** | Checkbox & Tombol **Setujui Spesifikasi (Approval A)** | Perintah `approve-spec` (ketik `APPROVE_SPEC`) |
 | **Merespons Usulan Subworker (*On-The-Fly HITL*)** | Modal / Kartu Interaktif **Subworker HITL Approval & Key Input** | Prompt interaktif saat `plan` / `construct` meminta persetujuan & API key Subworker |
@@ -64,7 +66,7 @@ Untuk mencegah pekerjaan terhenti ketika sebuah model kehabisan kuota atau menca
 
 ---
 
-## 3. Langkah 1 & 2: Katalog Komponen Terdaftar, Batasan Prompt, Pembuatan Komponen Baru, & Verifikasi Formal (Stage 1 & 2)
+## 3. Langkah 1 & 2: Katalog Komponen Terdaftar, Batasan Prompt, Pembuatan Komponen Baru, Pengikatan Eksternal, Sintesis On-The-Fly, & Verifikasi Formal
 
 1. **Sajian Katalog Komponen Terdaftar & Panduan Batasan Prompt (Bagian 1 GUI / Perintah `components` CLI)**:
    - Sebelum memasukkan prompt, AMCA menyajikan **Katalog Komponen Terdaftar** yang mencantumkan seluruh komponen yang diizinkan (6 komponen inti bawaan + seluruh komponen kustom yang Anda daftarkan), lengkap dengan port masuk (`in`), port keluar (`out`), kunci konfigurasi (`config_keys`), dan **Kontrak Hoare ($P_c \rightarrow Q_c$)**.
@@ -72,22 +74,33 @@ Untuk mencegah pekerjaan terhenti ketika sebuah model kehabisan kuota atau menca
      - YAML hanya dapat merangkai komponen yang terdaftar pada katalog tersebut.
      - Keluaran `input_source` (`text`) wajib divalidasi oleh `validate_text` (atau komponen transformasi kustom yang menjamin `non_empty_trimmed`) sebelum masuk ke komponen analisis (`FO-HOA-01`).
      - Prompt dapat meminta **Mesin Tunggal (`single_machine`)**, **Pipeline Linier (`linear_pipeline`)**, maupun **Graf Nonlinier / DAG Paralel (`nonlinear_dag`)**.
-2. **Pembuatan & Pendaftaran Komponen Baru (*Custom Component Studio* — Bagian 8 GUI / `register-component` CLI)**:
-   - Jika Anda membutuhkan kemampuan pemrosesan baru di luar 6 komponen bawaan (misalnya penghitung kalimat `sentence_counter`, pencari kata kunci `keyword_counter`, atau normalisasi huruf `uppercase_normalizer`), buka **Bagian 8 · Pembuat & Pendaftar Komponen Baru** di GUI (atau jalankan `& $PY -m amca_agent.cli register-component --id sentence_counter --role "Menghitung jumlah kalimat dari teks tervalidasi"`).
-   - Komponen baru akan divalidasi, dilengkapi kontrak Hoare dan generator kode AST Stage 3, disimpan di `artifacts/custom_components/custom_registry.json`, dan langsung tampil pada **Katalog Komponen Terdaftar** sehingga siap dipanggil dari prompt Anda!
-3. **Sambutan & Klasifikasi Cakupan**:
+2. **Pembuatan Komponen Deterministik Berbasis Template (*Custom Component Studio* — Bagian 8 GUI / `register-component` CLI)**:
+   - Jika Anda membutuhkan kemampuan pemrosesan baru dari template bawaan (misalnya penghitung kalimat `sentence_counter`, pencari kata kunci `keyword_counter`, atau normalisasi huruf `uppercase_normalizer`), buka **Bagian 8 · Pembuat & Pendaftar Komponen Baru** di GUI (atau jalankan `& $PY -m amca_agent.cli register-component --id sentence_counter --role "Menghitung jumlah kalimat dari teks tervalidasi"`).
+3. **Pengikatan Berkas Komponen Eksternal dari Antigravity / OpenCode / Codex (`bind-component` CLI / Tab Bagian 8 GUI)**:
+   - Jika Anda telah menulis kode komponen Python di luar sistem (misalnya dikembangkan melalui Antigravity, OpenCode, Codex, atau editor teks biasa), Anda dapat langsung mengikatnya ke pustaka AMCA:
+     - Melalui CLI: `& $PY -m amca_agent.cli bind-component --source path/to/my_component.py`
+     - Melalui GUI: Buka tab **Ikat Berkas Komponen Eksternal (.py)** di Bagian 8, pilih file atau tempel kodenya, lalu klik **Audit Keamanan & Ikat Komponen**.
+   - **Gerbang Keamanan AST Otomatis**: Kode eksternal diaudit ketat secara statis sebelum dijalankan. Seluruh modul berbahaya (`os`, `subprocess`, `socket`, `eval`, `exec`) langsung ditolak (*fail-closed*). Kode yang aman dibungkus dengan *runtime Hoare guards*, diuji di sandbox, dan didaftarkan ke `catalog.json` serta `src/amca_components/custom/`.
+4. **Sintesis Komponen *On-The-Fly* oleh Code Agent (Di Tengah Alur Chat/YAML)**:
+   - Apabila Anda memasukkan prompt yang membutuhkan komponen baru yang belum terdaftar di katalog, Code Agent AMCA:
+     1. Merancang kandidat YAML yang memuat nama komponen baru tersebut beserta alur port-nya.
+     2. Menjalankan **Propagasi Batasan Hoare Dua Arah** untuk menyimpulkan prasyarat $P_v$ dari node input dan pascakondisi $Q_v$ untuk node penerus.
+     3. Menampilkan kartu persetujuan *Human-in-the-Loop* di GUI (Bagian 3) atau prompt konfirmasi di CLI (`amca> synthesize` / `approve-components`).
+     4. Menghasilkan kode Python nyata (*on-the-fly*), mengauditnya via Gerbang AST, membungkus kontrak, menguji di sandbox, dan mengikatnya ke pustaka kumulatif.
+     5. Memverifikasi ulang kandidat YAML hingga status `verified` dan Sertifikat Bukti Formal menjadi **`PROVED`**.
+5. **Sambutan & Klasifikasi Cakupan**:
    - Aplikasi menyapa Anda dengan: ***“Mesin/agent apakah yang Anda ingin buat?”***
    - Jelaskan mesin/agen yang ingin Anda bangun dalam bahasa alami. Contoh:
      > *"Saya ingin membuat sistem mesin analisis teks yang menerima teks masukan, memvalidasi agar teks tidak kosong, menghitung jumlah karakter dan kata secara terpisah, menggabungkan ringkasannya, lalu menghasilkan laporan."*
    - Jika permintaan berada di luar cakupan rekayasa mesin/agen (misalnya meminta resep masakan), AMCA akan menolak secara sopan tanpa membuat YAML.
-2. **Peninjauan Draf YAML `amca/v1alpha1` & Asumsi Eksplisit**:
+6. **Peninjauan Draf YAML `amca/v1alpha1` & Asumsi Eksplisit**:
    - AMCA menghasilkan draf YAML bernomor revisi (`rev-1`, `rev-2`, dst.) yang secara eksplisit memuat bagian `assumptions` (asumsi), `limitations` (batasan), dan `unresolvedQuestions` (pertanyaan terbuka).
-3. **Pemeriksaan Verifikasi Struktural + Verifikasi Formal Stage 1 & 2**:
+7. **Pemeriksaan Verifikasi Struktural + Verifikasi Formal Stage 1 & 2**:
    - Setiap draf secara otomatis diperiksa oleh:
      - **Verifier Struktural**: Memeriksa kevalidan skema, komponen allowlist, kecocokan tipe port, dan ketiadaan siklus (DAG).
      - **Stage 1 Formal Verifier**: Membuktikan keterjangkauan sumber-ke-muara (`FO-TOP-01`), konfluensi penjadwalan *Church-Rosser* (`FO-CON-01`), implikasi prasyarat-pascakondisi Hoare $Q_u \supseteq P_v$ (`FO-HOA-01`), pencapaian tujuan (`FO-GOAL-01`), dan keamanan *secret taint* (`FO-SEC-01`).
      - **Stage 2 Formal Verifier**: Memastikan revisi baru tidak melanggar invarian keamanan dari revisi sebelumnya.
-4. **Iterasi Revisi Berbasis *Counterexample***:
+8. **Iterasi Revisi Berbasis *Counterexample***:
    - Jika terdapat bukti formal yang gagal (`REFUTED`), AMCA menampilkan **Counterexample Konkret** (misalnya input `"   "` yang lolos dari `input_source` namun melanggar prasyarat `analysis_a` jika `validate_text` dilewati).
    - Klik **Revisi dengan Agent** atau ketik `revisi <instruksi>`. Diagnostik dan *counterexample* otomatis dikirim ke model agar diperbaiki pada revisi berikutnya.
 
@@ -109,8 +122,8 @@ Untuk mencegah pekerjaan terhenti ketika sebuah model kehabisan kuota atau menca
 ## 5. Langkah 6: Konstruksi Proyek, Verifikasi Stage 3 ($G_{\text{code}} \cong G_{\text{yaml}}$), & Handover ZIP
 
 Setelah Approval A dan Approval B aktif, jalankan **Bangun Proyek (`construct`)**:
-1. **Pembuatan Paket Python Mandiri**: AMCA menulis kode sumber Python lengkap beserta *runtime pre/postcondition guards* dan unit test ke `artifacts/constructed_projects/<machine_id>-rev<NNN>/`.
+1. **Pembuatan Paket Python Mandiri & Panggilan Pustaka Kumulatif**: AMCA menulis kode sumber Python lengkap (`pipeline.py`). Kode mesin nyata langsung memanggil fungsi-fungsi komponen dari pustaka kumulatif `src/amca_components/` (`from amca_components import run_input_source, ...`), memisahkan logika perakitan dari implementasi komponen.
 2. **Verifikasi Formal Stage 3 (`verify_code_refinement`)**: AMCA mem-parsing AST kode Python yang baru dibuat menggunakan `ast.parse()` untuk membuktikan secara matematis bahwa graf aliran data di dalam kode Python **isomorfik (identik secara struktural)** dengan spesifikasi YAML ($G_{\text{code}} \cong G_{\text{yaml}}$).
 3. **Eksekusi Pengujian Nyata**: AMCA menjalankan `compileall` dan suite `unittest` asli milik proyek yang dihasilkan.
-4. **Pengemasan Handover ZIP**: Seluruh kode, test, `machine.yaml`, `formal-proof-certificate.json`, `machine-dag.dot`, `README.md`, dan log audit yang telah disanitasi dikemas ke dalam **`<machine_id>-rev<NNN>-handover.zip`** yang siap diunduh dan dijalankan secara mandiri di komputer mana pun.
+4. **Pengemasan Handover ZIP Mandiri**: Seluruh kode mesin, tes unit, pustaka kumulatif `src/amca_components/` (beserta `catalog.json`, `contracts.py`, `builtin.py`, dan modul `custom/`), `machine.yaml`, `formal-proof-certificate.json`, `machine-dag.dot`, `README.md`, dan log audit dikemas ke dalam **`<machine_id>-rev<NNN>-handover.zip`** yang siap diekstrak dan dijalankan secara mandiri di mana pun.
 

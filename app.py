@@ -19,6 +19,11 @@ from amca.verifier import verify_candidate
 from amca_agent.approvals import record_construction_approval, record_spec_approval
 from amca_agent.artifacts import ARTIFACT_ROOT, list_sessions, load_chat, save_chat, save_run
 from amca_agent.builder import build_constructed_project
+from amca_agent.component_binder import bind_component_from_python_source, bind_external_component_file
+from amca_agent.component_synthesizer import (
+    detect_unregistered_components_in_yaml,
+    synthesize_and_bind_missing_components,
+)
 from amca_agent.custom_components import (
     OPERATION_TEMPLATES,
     draft_custom_component_from_description,
@@ -369,6 +374,34 @@ with right:
     st.text_area("Spesifikasi mesin YAML", key="machine_yaml", height=340)
     if st.button("Validasi YAML saat ini"):
         _record_version("manual_edit")
+    unregistered_plans = detect_unregistered_components_in_yaml(
+        st.session_state.machine_yaml,
+        st.session_state.get("problem", ""),
+    )
+    if unregistered_plans:
+        st.warning(
+            f"⚠️ Terdeteksi {len(unregistered_plans)} komponen pada YAML yang belum terdaftar di Library AMCA:\n"
+            + "\n".join(
+                f"- `{p.component_id}`: in={p.inferred_input_ports}, out={p.inferred_output_ports} ({p.role_description})"
+                for p in unregistered_plans
+            )
+        )
+        if st.button("⚡ Sintesis & Daftarkan Komponen On-The-Fly (Code Agent)", key="btn_synthesize_otf"):
+            try:
+                bound = synthesize_and_bind_missing_components(
+                    unregistered_plans,
+                    problem_statement=st.session_state.get("problem", ""),
+                    harness=harness,
+                    persist=True,
+                )
+                st.success(
+                    f"Berhasil mensintesis & mendaftarkan {len(bound)} komponen baru ke library `amca_components`: "
+                    + ", ".join(f"`{b.spec.component_id}`" for b in bound)
+                )
+                _record_version("synthesis")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Sintesis komponen gagal: {exc}")
     if st.session_state.verification is not None:
         status = st.session_state.verification.status
         (st.success if status == "verified" else st.error)(f"Validasi AMCA: {status.upper()}")
@@ -577,83 +610,139 @@ st.caption(
     "Komponen yang didaftarkan di sini langsung tampil pada Katalog Komponen Terdaftar (Bagian 1) dan siap dipakai dalam prompt YAML, verifikasi formal 3-tahap, maupun konstruksi paket kode Python (.zip)."
 )
 with st.expander("🧩 Buat & Daftarkan Komponen Baru atau Kelola Komponen Kustom", expanded=False):
-    cc_col1, cc_col2 = st.columns([1, 1])
-    with cc_col1:
-        cc_id = st.text_input("ID Komponen Baru (`^[a-z][a-z0-9_-]{0,63}$`)", value="sentence_counter", key="cc_id")
-        cc_alias = st.text_input("Alias `amca/v1alpha1`", value=f"custom.{cc_id.strip() or 'sentence_counter'}", key="cc_alias")
-        cc_name = st.text_input("Nama Tampilan", value="Sentence Counter", key="cc_name")
-        cc_role = st.text_input(
-            "Deskripsi Peran & Fungsi",
-            value="Menghitung jumlah kalimat dari teks yang telah divalidasi.",
-            key="cc_role",
-        )
-    with cc_col2:
-        cc_template = st.selectbox(
-            "Template Operasi Deterministik",
-            list(OPERATION_TEMPLATES.keys()),
-            format_func=lambda k: f"{k} — {OPERATION_TEMPLATES[k]['label']}",
-            key="cc_template",
-        )
-        cc_mode = st.selectbox(
-            "Mode Perhitungan / Transformasi",
-            ["sentence_count", "line_count", "digit_count", "keyword_count", "uppercase", "lowercase", "titlecase", "normalize_spaces"],
-            key="cc_mode",
-        )
-        cc_keyword = st.text_input("Kata Kunci Default (opsional, untuk `keyword_count`)", value="", key="cc_keyword")
-        cc_hint = st.text_input(
-            "Panduan Batasan Prompt untuk User",
-            value=f"Sebutkan `{cc_id.strip() or 'sentence_counter'}` setelah `validate_text` pada prompt Anda.",
-            key="cc_hint",
-        )
+    tab_template, tab_external = st.tabs([
+        "🛠️ Template Operasi Deterministik",
+        "🔗 Ikat File Python (.py) dari Luar (Antigravity/OpenCode/Codex)",
+    ])
+    with tab_template:
+        cc_col1, cc_col2 = st.columns([1, 1])
+        with cc_col1:
+            cc_id = st.text_input("ID Komponen Baru (`^[a-z][a-z0-9_-]{0,63}$`)", value="sentence_counter", key="cc_id")
+            cc_alias = st.text_input("Alias `amca/v1alpha1`", value=f"custom.{cc_id.strip() or 'sentence_counter'}", key="cc_alias")
+            cc_name = st.text_input("Nama Tampilan", value="Sentence Counter", key="cc_name")
+            cc_role = st.text_input(
+                "Deskripsi Peran & Fungsi",
+                value="Menghitung jumlah kalimat dari teks yang telah divalidasi.",
+                key="cc_role",
+            )
+        with cc_col2:
+            cc_template = st.selectbox(
+                "Template Operasi Deterministik",
+                list(OPERATION_TEMPLATES.keys()),
+                format_func=lambda k: f"{k} — {OPERATION_TEMPLATES[k]['label']}",
+                key="cc_template",
+            )
+            cc_mode = st.selectbox(
+                "Mode Perhitungan / Transformasi",
+                ["sentence_count", "line_count", "digit_count", "keyword_count", "uppercase", "lowercase", "titlecase", "normalize_spaces"],
+                key="cc_mode",
+            )
+            cc_keyword = st.text_input("Kata Kunci Default (opsional, untuk `keyword_count`)", value="", key="cc_keyword")
+            cc_hint = st.text_input(
+                "Panduan Batasan Prompt untuk User",
+                value=f"Sebutkan `{cc_id.strip() or 'sentence_counter'}` setelah `validate_text` pada prompt Anda.",
+                key="cc_hint",
+            )
 
-    btn_col1, btn_col2 = st.columns([1, 1])
-    with btn_col1:
-        if st.button("Daftarkan Komponen ke Registry AMCA", key="btn_register_cc"):
+        btn_col1, btn_col2 = st.columns([1, 1])
+        with btn_col1:
+            if st.button("Daftarkan Komponen ke Registry AMCA", key="btn_register_cc"):
+                try:
+                    cfg_keys: list[str] = []
+                    def_cfg: dict[str, Any] = {}
+                    params: dict[str, Any] = {"mode": cc_mode}
+                    if cc_keyword.strip():
+                        cfg_keys.append("keyword")
+                        def_cfg["keyword"] = cc_keyword.strip()
+                        params["keyword"] = cc_keyword.strip()
+                    spec_payload = {
+                        "component_id": cc_id.strip(),
+                        "alias": cc_alias.strip() or f"custom.{cc_id.strip()}",
+                        "name": cc_name.strip() or cc_id.strip().replace("_", " ").title(),
+                        "role": cc_role.strip(),
+                        "operation_template": cc_template,
+                        "config_keys": cfg_keys,
+                        "default_config": def_cfg,
+                        "template_params": params,
+                        "prompt_hint": cc_hint.strip(),
+                    }
+                    reg_spec = register_custom_component(
+                        spec_payload,
+                        persist=True,
+                        registry_path=ARTIFACT_ROOT / "custom_components" / "custom_registry.json",
+                    )
+                    st.success(
+                        f"Komponen `{reg_spec.component_id}` (`{reg_spec.alias}`) berhasil didaftarkan ke Registry AMCA dan siap digunakan di prompt YAML!"
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Gagal mendaftarkan komponen: {getattr(exc, 'message', str(exc))}")
+        with btn_col2:
+            if st.button("Draft Otomatis dari Deskripsi Peran", key="btn_draft_cc"):
+                try:
+                    drafted = draft_custom_component_from_description(cc_role, component_id=cc_id.strip(), alias=cc_alias.strip())
+                    reg_spec = register_custom_component(
+                        drafted,
+                        persist=True,
+                        registry_path=ARTIFACT_ROOT / "custom_components" / "custom_registry.json",
+                    )
+                    st.success(
+                        f"Komponen hasil draft otomatis `{reg_spec.component_id}` (`{reg_spec.operation_template}`) terdaftar!"
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Gagal membuat draft komponen: {getattr(exc, 'message', str(exc))}")
+
+    with tab_external:
+        st.markdown(
+            "Ikat fungsi Python murni yang Anda buat di **Antigravity**, **OpenCode**, atau **Codex**. "
+            "Kode akan diverifikasi melalui **Static AST Security Gate** (menolak import/panggilan OS berbahaya) "
+            "dan diuji di sandbox sebelum didaftarkan ke library `amca_components`."
+        )
+        ext_py_code = st.text_area(
+            "Kode Python Komponen (.py)",
+            height=180,
+            value=(
+                "import re\n\n"
+                "def clean_punctuation(text: str) -> str:\n"
+                "    \"\"\"Menghapus tanda baca dan menormalkan spasi.\"\"\"\n"
+                "    return re.sub(r'[^\\w\\s]', '', text or '').strip()\n"
+            ),
+            key="ext_py_code",
+        )
+        ec_col1, ec_col2 = st.columns([1, 1])
+        with ec_col1:
+            ext_cid = st.text_input("ID Komponen (opsional, auto-infer dari fungsi)", value="", key="ext_cid")
+            ext_alias = st.text_input("Alias v1alpha1 (opsional)", value="", key="ext_alias")
+        with ec_col2:
+            ext_name = st.text_input("Nama Tampilan (opsional)", value="", key="ext_name")
+            ext_role = st.text_input("Deskripsi Peran (opsional)", value="", key="ext_role")
+
+        if st.button("Audit AST, Uji Kontrak Hoare & Ikat ke Library AMCA", key="btn_bind_external_py"):
             try:
-                cfg_keys: list[str] = []
-                def_cfg: dict[str, Any] = {}
-                params: dict[str, Any] = {"mode": cc_mode}
-                if cc_keyword.strip():
-                    cfg_keys.append("keyword")
-                    def_cfg["keyword"] = cc_keyword.strip()
-                    params["keyword"] = cc_keyword.strip()
-                spec_payload = {
-                    "component_id": cc_id.strip(),
-                    "alias": cc_alias.strip() or f"custom.{cc_id.strip()}",
-                    "name": cc_name.strip() or cc_id.strip().replace("_", " ").title(),
-                    "role": cc_role.strip(),
-                    "operation_template": cc_template,
-                    "config_keys": cfg_keys,
-                    "default_config": def_cfg,
-                    "template_params": params,
-                    "prompt_hint": cc_hint.strip(),
-                }
-                reg_spec = register_custom_component(
-                    spec_payload,
+                bound = bind_component_from_python_source(
+                    ext_py_code,
+                    component_id=ext_cid.strip(),
+                    alias=ext_alias.strip(),
+                    name=ext_name.strip(),
+                    role=ext_role.strip(),
+                    origin="external_gui_bound",
                     persist=True,
-                    registry_path=ARTIFACT_ROOT / "custom_components" / "custom_registry.json",
                 )
                 st.success(
-                    f"Komponen `{reg_spec.component_id}` (`{reg_spec.alias}`) berhasil didaftarkan ke Registry AMCA dan siap digunakan di prompt YAML!"
+                    f"Komponen eksternal `{bound.spec.component_id}` (`{bound.spec.alias}`) lolos AST Gate & "
+                    f"berhasil diikat ke library `amca_components`!"
                 )
+                st.json({
+                    "component_id": bound.spec.component_id,
+                    "input_ports": bound.spec.input_ports,
+                    "output_ports": bound.spec.output_ports,
+                    "sample_outputs": bound.sample_outputs,
+                    "sha256": bound.sha256,
+                })
                 st.rerun()
             except Exception as exc:
-                st.error(f"Gagal mendaftarkan komponen: {getattr(exc, 'message', str(exc))}")
-    with btn_col2:
-        if st.button("Draft Otomatis dari Deskripsi Peran", key="btn_draft_cc"):
-            try:
-                drafted = draft_custom_component_from_description(cc_role, component_id=cc_id.strip(), alias=cc_alias.strip())
-                reg_spec = register_custom_component(
-                    drafted,
-                    persist=True,
-                    registry_path=ARTIFACT_ROOT / "custom_components" / "custom_registry.json",
-                )
-                st.success(
-                    f"Komponen hasil draft otomatis `{reg_spec.component_id}` (`{reg_spec.operation_template}`) terdaftar!"
-                )
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Gagal membuat draft komponen: {getattr(exc, 'message', str(exc))}")
+                st.error(f"Pengikatan komponen ditolak: {getattr(exc, 'message', str(exc))}")
 
     custom_list = list_custom_component_specs()
     if custom_list:

@@ -19,6 +19,11 @@ from amca_agent.approvals import (
 )
 from amca_agent.artifacts import ARTIFACT_ROOT, ROOT, list_sessions, load_chat, save_chat, save_run
 from amca_agent.builder import DEFAULT_CONSTRUCTED_PROJECTS_DIR, build_constructed_project
+from amca_agent.component_binder import bind_external_component_file
+from amca_agent.component_synthesizer import (
+    detect_unregistered_components_in_yaml,
+    synthesize_and_bind_missing_components,
+)
 from amca_agent.custom_components import (
     OPERATION_TEMPLATES,
     draft_custom_component_from_description,
@@ -234,10 +239,14 @@ def _chat(args) -> int:
             + (f" | Formal: {formal_cert.overall_status}" if formal_cert else "")
             + (f" — {error}" if error else "")
         )
+        unreg = detect_unregistered_components_in_yaml(current, args.problem)
+        if unreg:
+            print(f"[Pemberitahuan Komponen Baru]: Terdeteksi {len(unreg)} komponen belum terdaftar: {', '.join(p.component_id for p in unreg)}")
+            print("Ketik 'synthesize' atau 'approve-components' untuk meminta Code Agent mensintesis komponen ini secara on-the-fly.")
         _yaml(current)
 
     print(
-        "Perintah sesi: components, register-component <id> <deskripsi>, revisi <permintaan>, show, load <yaml>, versions, restore <nomor>, "
+        "Perintah sesi: components, register-component <id> <deskripsi>, synthesize, revisi <permintaan>, show, load <yaml>, versions, restore <nomor>, "
         "validate, proof, hardware, approve-spec, plan, approve-construction, construct, graph [FILE.dot], run <input.json>, quit"
     )
     while True:
@@ -266,6 +275,26 @@ def _chat(args) -> int:
                     print(f"Komponen kustom terdaftar: {registered.component_id} ({registered.alias}) -> {registered.output_ports}")
                 except Exception as exc:
                     print(f"Gagal mendaftarkan komponen: {getattr(exc, 'message', str(exc))}", file=sys.stderr)
+        elif line in {"synthesize", "approve-components", "synthesize-components"}:
+            unreg = detect_unregistered_components_in_yaml(current, args.problem)
+            if not unreg:
+                print("Tidak ada komponen tak terdaftar pada YAML saat ini.")
+            else:
+                try:
+                    records = synthesize_and_bind_missing_components(
+                        unreg,
+                        problem_statement=args.problem,
+                        harness=harness,
+                        persist=True,
+                    )
+                    print(f"Sintesis on-the-fly berhasil: {len(records)} komponen baru didaftarkan ke library amca_components.")
+                    candidate, verification, formal_cert = _check(current)
+                    print(
+                        f"Status validasi diperbarui: {verification.status.upper()}"
+                        + (f" | Formal: {formal_cert.overall_status}" if formal_cert else "")
+                    )
+                except Exception as exc:
+                    print(f"Sintesis komponen gagal: {exc}", file=sys.stderr)
         elif line == "versions":
             for index, version in enumerate(versions, 1):
                 print(
@@ -515,6 +544,18 @@ def _parser() -> argparse.ArgumentParser:
     reg_cmd.add_argument("--output")
     unreg_cmd = sub.add_parser("unregister-component", help="remove a user-registered custom component")
     unreg_cmd.add_argument("--id", required=True, help="custom component_id to remove")
+    bind_cmd = sub.add_parser("bind-component", help="audit, wrap, test, and bind an external Python component file (.py)")
+    bind_cmd.add_argument("file", help="path to external .py file (e.g. from Antigravity, OpenCode, Codex)")
+    bind_cmd.add_argument("--id", default="", help="optional canonical component_id")
+    bind_cmd.add_argument("--alias", default="", help="optional v1alpha1 alias")
+    bind_cmd.add_argument("--name", default="", help="display name of component")
+    bind_cmd.add_argument("--role", default="", help="description of component")
+    bind_cmd.add_argument("--output")
+    syn_cmd = sub.add_parser("synthesize-missing", help="detect unregistered components in YAML and synthesize Python code on-the-fly")
+    syn_cmd.add_argument("spec", help="path to YAML specification")
+    syn_cmd.add_argument("--problem", default="", help="problem statement context for synthesis")
+    syn_cmd.add_argument("--approve", action="store_true", help="approve on-the-fly synthesis and binding (APPROVE_COMPONENTS)")
+    syn_cmd.add_argument("--output")
     validate = sub.add_parser("validate", help="validate and verify YAML without running")
     validate.add_argument("spec")
     validate.add_argument("--output")
@@ -623,6 +664,58 @@ def main(argv: list[str] | None = None) -> int:
             unregister_custom_component(args.id, persist=True, registry_path=custom_reg_path)
             _json({"unregistered": args.id, "status": "ok"})
             return 0
+        elif args.command == "bind-component":
+            rec = bind_external_component_file(
+                args.file,
+                component_id=args.id,
+                alias=args.alias,
+                name=args.name,
+                role=args.role,
+                persist=True,
+            )
+            _json(
+                {
+                    "status": "bound",
+                    "component_id": rec.spec.component_id,
+                    "alias": rec.spec.alias,
+                    "module_path": rec.library_module_path,
+                    "sha256": rec.sha256,
+                    "audit_passed": rec.audit_report.passed,
+                    "sample_inputs": rec.sample_inputs,
+                    "sample_outputs": rec.sample_outputs,
+                    "preconditions_verified": rec.precondition_rejection_verified,
+                },
+                args.output,
+            )
+            return 0
+        elif args.command == "synthesize-missing":
+            spec_text = Path(args.spec).read_text(encoding="utf-8")
+            plans = detect_unregistered_components_in_yaml(spec_text, args.problem)
+            if not plans:
+                _json({"status": "no_missing_components", "plans": []}, args.output)
+                return 0
+            if not args.approve:
+                _json(
+                    {
+                        "status": "pending_approval",
+                        "confirmation_required": "APPROVE_COMPONENTS",
+                        "plans": [p.as_dict() for p in plans],
+                    },
+                    args.output,
+                )
+                return 1
+            records = synthesize_and_bind_missing_components(plans, problem_statement=args.problem, persist=True)
+            cand, verification, formal_cert = _check(spec_text)
+            _json(
+                {
+                    "status": "synthesized_and_bound",
+                    "bound_components": [r.spec.component_id for r in records],
+                    "verification_status": verification.status,
+                    "formal_status": formal_cert.overall_status,
+                },
+                args.output,
+            )
+            return 0 if verification.status == "verified" else 1
         elif args.command == "validate":
             candidate, verification, formal_cert = _check(Path(args.spec).read_text(encoding="utf-8"))
             _json(

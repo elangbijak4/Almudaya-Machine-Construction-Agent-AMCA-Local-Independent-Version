@@ -1,0 +1,12 @@
+{
+  "builtin_components": [
+    "aggregate_results",
+    "analysis_a",
+    "analysis_b",
+    "generate_report",
+    "input_source",
+    "validate_text"
+  ],
+  "custom_components": {},
+  "library_version": "0.3.0"
+}

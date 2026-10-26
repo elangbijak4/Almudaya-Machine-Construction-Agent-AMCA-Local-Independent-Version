@@ -27,9 +27,23 @@ from amca_agent.system_spec import (
     COMPONENT_ROLES,
     IDENTIFIER_RE,
 )
+from amca_components import (
+    clear_custom_library_modules,
+    execute_library_component,
+    register_library_module,
+    unregister_library_module,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CUSTOM_REGISTRY_PATH = ROOT / "artifacts" / "custom_components" / "custom_registry.json"
+DEFAULT_CUSTOM_MODULES_DIR = ROOT / "artifacts" / "custom_components" / "modules"
+
+
+class CustomComponentError(SpecificationError):
+    """Raised when a custom, bound, or synthesized component fails validation or security checks."""
+
+    def __init__(self, message: str, path: str = "$.custom_component") -> None:
+        super().__init__(message, path=path)
 
 OPERATION_TEMPLATES: dict[str, dict[str, Any]] = {
     "text_transform": {
@@ -82,6 +96,14 @@ OPERATION_TEMPLATES: dict[str, dict[str, Any]] = {
         "default_preconditions": {"summary": ("is_str", "formatted_metrics_summary")},
         "default_postconditions": {"report": ("is_obj", "report_contains_summary")},
     },
+    "custom_python": {
+        "label": "Modul Kode Python Kustom (On-The-Fly Code Agent / External Bound .py)",
+        "description": "Komponen dengan kode Python murni yang telah lulus Static AST Security Gate dan diikat ke amca_components.",
+        "default_inputs": {"text": "string"},
+        "default_outputs": {"text": "string"},
+        "default_preconditions": {"text": ("is_str", "non_empty_trimmed")},
+        "default_postconditions": {"text": ("is_str", "non_empty_raw", "non_empty_trimmed", "len_ge_1")},
+    },
 }
 
 
@@ -100,6 +122,8 @@ class CustomComponentSpec:
     postconditions: dict[str, tuple[str, ...]]
     template_params: dict[str, Any]
     prompt_hint: str
+    custom_python_source: str = ""
+    origin: str = "studio_template"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -116,6 +140,8 @@ class CustomComponentSpec:
             "postconditions": {k: list(v) for k, v in self.postconditions.items()},
             "template_params": dict(self.template_params),
             "prompt_hint": self.prompt_hint,
+            "custom_python_source": self.custom_python_source,
+            "origin": self.origin,
         }
 
     @classmethod
@@ -145,6 +171,8 @@ class CustomComponentSpec:
             data.get("prompt_hint", "")
             or f"Sebutkan komponen `{cid}` (atau alias `{alias}`) di prompt Anda untuk {role.lower()}"
         ).strip()
+        py_src = str(data.get("custom_python_source", ""))
+        origin = str(data.get("origin", "studio_template" if not py_src else "custom_python"))
         return cls(
             component_id=cid,
             alias=alias,
@@ -159,10 +187,122 @@ class CustomComponentSpec:
             postconditions=post,
             template_params=params,
             prompt_hint=hint,
+            custom_python_source=py_src,
+            origin=origin,
         )
 
 
 _CUSTOM_SPECS: dict[str, CustomComponentSpec] = {}
+
+
+def render_library_module_for_spec(spec: CustomComponentSpec) -> str:
+    """Return the standalone Python library module (`amca_components/custom/<id>.py`) for a CustomComponentSpec."""
+    if spec.custom_python_source.strip():
+        return spec.custom_python_source.strip() + "\n"
+
+    safe_id = "".join(c if c.isalnum() else "_" for c in spec.component_id)
+    func_name = f"run_custom_{safe_id}"
+    cid = spec.component_id
+    in_port = next(iter(spec.input_ports.keys()), "text")
+    out_port = next(iter(spec.output_ports.keys()), "finding")
+    default_mode = str(spec.template_params.get("mode", "sentence_count"))
+    default_kw = str(spec.template_params.get("keyword", spec.default_config.get("keyword", "amca")))
+    default_prefix = str(spec.template_params.get("prefix", spec.default_config.get("prefix", "")))
+    default_suffix = str(spec.template_params.get("suffix", spec.default_config.get("suffix", "")))
+    default_tag = str(spec.template_params.get("tag", spec.default_config.get("tag", cid)))
+
+    header = f'''"""AMCA Registered Library Component Module: {cid}."""
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from amca_components.contracts import (
+    ContractViolationError,
+    _enforce_postconditions,
+    _enforce_preconditions,
+)
+
+AMCA_COMPONENT_META = {spec.as_dict()!r}
+'''
+
+    if spec.operation_template == "text_transform":
+        body = f'''
+def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    _enforce_preconditions({cid!r}, inputs)
+    raw = str(inputs.get({in_port!r}, "")).strip()
+    if not raw:
+        raise ContractViolationError("{cid}: input text cannot be empty or whitespace-only")
+    mode = str(config.get("mode", {default_mode!r})).lower()
+    prefix = str(config.get("prefix", {default_prefix!r}))
+    suffix = str(config.get("suffix", {default_suffix!r}))
+    if mode == "uppercase":
+        transformed = raw.upper()
+    elif mode == "lowercase":
+        transformed = raw.lower()
+    elif mode == "titlecase":
+        transformed = raw.title()
+    elif mode == "prefix_suffix":
+        transformed = f"{{prefix}}{{raw}}{{suffix}}".strip()
+    else:
+        transformed = " ".join(raw.split())
+    outputs = {{{out_port!r}: transformed}}
+    _enforce_postconditions({cid!r}, outputs)
+    return outputs
+'''
+        return header + body
+
+    if spec.operation_template in {"text_metric_object", "text_metric_string"}:
+        is_str_summary = spec.operation_template == "text_metric_string"
+        body = f'''
+def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    _enforce_preconditions({cid!r}, inputs)
+    raw = str(inputs.get({in_port!r}, ""))
+    if not raw.strip():
+        raise ContractViolationError("{cid}: precondition NonEmptyTrimmed({in_port}) violated")
+    mode = str(config.get("mode", {default_mode!r})).lower()
+    kw = str(config.get("keyword", {default_kw!r})).lower()
+    if mode in ("sentence_count", "sentences"):
+        m_key, m_val = "sentences", len([s for s in re.split(r"[.!?]+", raw) if s.strip()])
+    elif mode in ("line_count", "lines"):
+        m_key, m_val = "lines", len([ln for ln in raw.splitlines() if ln.strip()])
+    elif mode in ("digit_count", "digits"):
+        m_key, m_val = "digits", sum(1 for c in raw if c.isdigit())
+    elif mode in ("keyword_count", "keyword"):
+        m_key, m_val = "keyword_hits", raw.lower().count(kw or "amca")
+    else:
+        m_key, m_val = "metric", len(raw.split())
+    if {is_str_summary!r}:
+        outputs = {{{out_port!r}: f"characters={{len(raw)}}; words={{len(raw.split())}}; {{m_key}}={{m_val}}"}}
+    else:
+        outputs = {{{out_port!r}: f"{{m_key}}={{m_val}}"}}
+    _enforce_postconditions({cid!r}, outputs)
+    return outputs
+'''
+        return header + body
+
+    if spec.operation_template == "dual_finding_combiner":
+        ports = list(spec.input_ports.keys())
+        p_a = ports[0] if len(ports) >= 1 else "finding_a"
+        p_b = ports[1] if len(ports) >= 2 else "finding_b"
+        body = f'''
+def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    _enforce_preconditions({cid!r}, inputs)
+    outputs = {{{out_port!r}: f"{{inputs[{p_a!r}]}}; {{inputs[{p_b!r}]}}"}}
+    _enforce_postconditions({cid!r}, outputs)
+    return outputs
+'''
+        return header + body
+
+    body = f'''
+def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    _enforce_preconditions({cid!r}, inputs)
+    tag = str(config.get("tag", {default_tag!r}))
+    outputs = {{{out_port!r}: {{"summary": str(inputs[{in_port!r}]), "tag": tag}}}}
+    _enforce_postconditions({cid!r}, outputs)
+    return outputs
+'''
+    return header + body
 
 
 def _compute_text_metric(text: str, mode: str, keyword: str = "amca") -> tuple[str, int]:
@@ -201,6 +341,30 @@ def _apply_text_transform(text: str, mode: str, prefix: str = "", suffix: str = 
 
 def _build_runtime_function(spec: CustomComponentSpec):
     """Build a pure, deterministic runtime function for `amca.registry.ComponentDefinition`."""
+    if spec.operation_template == "custom_python" or spec.custom_python_source.strip():
+        def _fn_custom_python(config: dict[str, JsonValue], inputs: dict[str, JsonValue]) -> dict[str, JsonValue]:
+            try:
+                raw_out = execute_library_component(spec.component_id, dict(inputs), dict(config), dict(inputs))
+            except Exception as exc:
+                raise ComponentFailure(f"{spec.component_id} failed: {exc}") from None
+            adapted: dict[str, JsonValue] = {}
+            for p_name, p_type in spec.output_ports.items():
+                val = raw_out.get(p_name)
+                if p_type == "object" and isinstance(val, str):
+                    in_text = str(next(iter(inputs.values()), val))
+                    adapted[p_name] = {
+                        "character_count": len(in_text),
+                        "word_count": len(in_text.split()),
+                        "custom_metric": 1,
+                        "value": val,
+                    }
+                elif p_type == "string" and isinstance(val, dict):
+                    adapted[p_name] = "; ".join(f"{k}={v}" for k, v in sorted(val.items()))
+                else:
+                    adapted[p_name] = val  # type: ignore[assignment]
+            return adapted
+        return _fn_custom_python
+
     in_port = next(iter(spec.input_ports.keys()), "text")
     out_port = next(iter(spec.output_ports.keys()), "finding")
     default_mode = str(spec.template_params.get("mode", "sentence_count"))
@@ -319,11 +483,25 @@ def register_custom_component(
     spec: CustomComponentSpec | dict[str, Any],
     *,
     persist: bool = True,
+    overwrite: bool = True,
     registry_path: Path | None = None,
 ) -> CustomComponentSpec:
-    """Validate and register a custom component across AMCA registry, system_spec aliases, and Hoare verifier."""
+    """Validate and register a custom component across AMCA registry, amca_components library, system_spec, and Hoare verifier."""
     parsed = spec if isinstance(spec, CustomComponentSpec) else CustomComponentSpec.from_dict(spec)
     validate_custom_component_spec(parsed)
+    if not overwrite and parsed.component_id in _CUSTOM_SPECS:
+        raise CustomComponentError(
+            f"Komponen kustom {parsed.component_id!r} sudah terdaftar dan overwrite=False."
+        )
+
+    module_src = render_library_module_for_spec(parsed)
+    disk_dir = ((registry_path.parent / "modules") if registry_path else DEFAULT_CUSTOM_MODULES_DIR) if persist else None
+    register_library_module(
+        parsed.component_id,
+        module_src,
+        parsed.as_dict(),
+        write_to_disk_dir=disk_dir,
+    )
 
     fn = _build_runtime_function(parsed)
     comp_def = ComponentDefinition(
@@ -367,6 +545,8 @@ def unregister_custom_component(
         raise SpecificationError(f"Tidak dapat menghapus komponen bawaan {component_id!r}.", path="$.custom_component")
     spec = _CUSTOM_SPECS.pop(component_id, None)
     unregister_custom_component_definition(component_id)
+    disk_dir = ((registry_path.parent / "modules") if registry_path else DEFAULT_CUSTOM_MODULES_DIR) if persist else None
+    unregister_library_module(component_id, disk_dir=disk_dir)
     COMPONENT_ALIASES.pop(component_id, None)
     if spec and spec.alias and spec.alias not in BUILTIN_COMPONENTS:
         COMPONENT_ALIASES.pop(spec.alias, None)
@@ -383,6 +563,7 @@ def clear_all_custom_components(*, persist: bool = False, registry_path: Path | 
         unregister_custom_component(cid, persist=False)
     _CUSTOM_SPECS.clear()
     clear_custom_component_definitions()
+    clear_custom_library_modules()
     if persist:
         save_custom_components_registry(registry_path)
 
@@ -566,11 +747,13 @@ def get_registered_components_catalog() -> list[dict[str, Any]]:
         out_str = ", ".join(f"{k}:{v}" for k, v in defn.output_ports.items())
         cfg_str = ", ".join(sorted(defn.config_keys)) if defn.config_keys else "{}"
         hint = custom_spec.prompt_hint if custom_spec else builtin_hints.get(cid, role)
+        origin = "builtin" if is_builtin else (custom_spec.origin if custom_spec else "custom")
         catalog.append(
             {
                 "component_id": cid,
                 "alias": alias,
-                "category": "Built-in Inti" if is_builtin else "Kustom Terdaftar",
+                "category": "Built-in Inti" if is_builtin else f"Kustom Terdaftar ({origin})",
+                "origin": origin,
                 "name": title,
                 "role": role,
                 "input_ports": in_str,
@@ -593,8 +776,8 @@ def format_catalog_markdown() -> str:
     lines = [
         f"### 📋 Katalog Komponen Terdaftar & Panduan Batasan Prompt ({len(rows)} Komponen: {builtin_count} Inti, {custom_count} Kustom)",
         "",
-        "Sebelum memasukkan *problem statement* / prompt untuk membangun YAML, perhatikan bahwa **AMCA menerapkan arsitektur deterministik *fail-closed***. "
-        "YAML hanya boleh merangkai komponen yang terdaftar pada tabel di bawah ini:",
+        "Sebelum memasukkan *problem statement* / prompt untuk membangun YAML, perhatikan bahwa **AMCA memelihara Library Komponen Terverifikasi (`amca_components`)**. "
+        "Anda dapat merangkai komponen yang sudah terdaftar di tabel bawah ini, mengikat komponen baru dari luar (`.py` hasil Antigravity/OpenCode/Codex), atau mengizinkan Agent AMCA mengenerate komponen baru secara *on-the-fly* saat menyusun YAML:",
         "",
         "| ID Komponen (`v1.0`) | Alias (`amca/v1alpha1`) | Kategori | Port Masuk (`in`) | Port Keluar (`out`) | Config Keys | Kontrak Hoare ($P_c \\rightarrow Q_c$) | Peran & Panduan Prompt |",
         "|---|---|---|---|---|---|---|---|",
@@ -609,8 +792,8 @@ def format_catalog_markdown() -> str:
     lines.extend(
         [
             "",
-            "#### 🧭 Batasan Prompt (*Prompt Boundaries*) yang Wajib Dipatuhi:",
-            "1. **Batasan Allowlist Komponen**: Prompt hanya dapat meminta penyusunan mesin dari komponen yang tertera pada tabel di atas. Jika Anda memerlukan fungsi baru (misalnya penghitung kalimat, filter kata kunci, atau normalisasi huruf), **buat dan daftarkan terlebih dahulu melalui Pembuat & Pendaftar Komponen Baru**, lalu sebutkan ID komponennya di dalam prompt Anda.",
+            "#### 🧭 Batasan Prompt (*Prompt Boundaries*) & Ekspansi Library Komponen:",
+            "1. **Katalog Komponen & Sintesis *On-The-Fly***: Anda dapat langsung meminta komponen dari tabel di atas, atau meminta kapabilitas baru di dalam prompt Anda. Jika YAML yang disusun Agent memuat komponen baru yang belum terdaftar, AMCA akan meminta persetujuan Anda untuk mengenerate kode Python komponen tersebut secara *on-the-fly* dan menambahkannya ke library `amca_components`.",
             "2. **Batasan Aliran Kontrak Hoare (`FO-HOA-01`)**: Keluaran `input_source` (`text`) **wajib** divalidasi terlebih dahulu oleh `validate_text` (atau komponen transformasi yang menjamin `non_empty_trimmed`) sebelum dihubungkan ke komponen analisis (`analysis_a`, `analysis_b`, atau analisis kustom).",
             "3. **Tiga Topologi Mesin yang Didukung**:",
             "   - **Mesin Tunggal (`single_machine`)**: Contoh prompt: *\"Buat mesin tunggal dengan `machine_id: single_reader` menggunakan `input_source`.\"*",

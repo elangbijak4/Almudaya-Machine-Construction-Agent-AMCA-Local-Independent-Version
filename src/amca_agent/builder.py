@@ -2,7 +2,8 @@
 
 Generates a real, runnable Python package in `artifacts/constructed_projects/<machine_id>-rev<NNN>/`
 after enforcing Two-Stage Human Approvals (`spec_approval` + `construction_approval`) and
-Stage 1/2 Formal Proof Certificate verification.
+Stage 1/2 Formal Proof Certificate verification. Calls `amca_components` as a reusable component library
+and bundles a self-contained snapshot of `amca_components` into the constructed project.
 """
 from __future__ import annotations
 
@@ -13,13 +14,23 @@ from pathlib import Path
 from typing import Any
 
 from amca.models import CandidateGraph
+from amca_components import (
+    COMPONENT_DISPATCH,
+    execute_library_component,
+    get_library_catalog_snapshot,
+)
 
 from .approvals import (
     ConstructionApprovalRecord,
     SpecApprovalRecord,
     validate_approvals_for_construction,
 )
-from .custom_components import CustomComponentSpec, get_custom_component_spec, list_custom_component_specs
+from .custom_components import (
+    CustomComponentSpec,
+    get_custom_component_spec,
+    list_custom_component_specs,
+    render_library_module_for_spec,
+)
 from .formal_verifier import FormalProofCertificate
 from .graph import to_dot
 from .planner import ConstructionPlan, _topological_sort
@@ -76,95 +87,8 @@ def classify_topology(candidate: CandidateGraph) -> str:
     return "nonlinear_dag"
 
 
-def _render_custom_component_function(spec: CustomComponentSpec) -> tuple[str, str]:
-    """Return (func_name, func_source) for a registered custom component."""
-    safe_id = "".join(c if c.isalnum() else "_" for c in spec.component_id)
-    func_name = f"run_custom_{safe_id}"
-    cid = spec.component_id
-    in_port = next(iter(spec.input_ports.keys()), "text")
-    out_port = next(iter(spec.output_ports.keys()), "finding")
-    default_mode = str(spec.template_params.get("mode", "sentence_count"))
-    default_kw = str(spec.template_params.get("keyword", spec.default_config.get("keyword", "amca")))
-    default_prefix = str(spec.template_params.get("prefix", spec.default_config.get("prefix", "")))
-    default_suffix = str(spec.template_params.get("suffix", spec.default_config.get("suffix", "")))
-    default_tag = str(spec.template_params.get("tag", spec.default_config.get("tag", cid)))
-
-    if spec.operation_template == "text_transform":
-        body = f'''def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions({cid!r}, inputs)
-    raw = str(inputs.get({in_port!r}, "")).strip()
-    if not raw:
-        raise ContractViolationError("{cid}: input text cannot be empty or whitespace-only")
-    mode = str(config.get("mode", {default_mode!r})).lower()
-    prefix = str(config.get("prefix", {default_prefix!r}))
-    suffix = str(config.get("suffix", {default_suffix!r}))
-    if mode == "uppercase":
-        transformed = raw.upper()
-    elif mode == "lowercase":
-        transformed = raw.lower()
-    elif mode == "titlecase":
-        transformed = raw.title()
-    elif mode == "prefix_suffix":
-        transformed = f"{{prefix}}{{raw}}{{suffix}}".strip()
-    else:
-        transformed = " ".join(raw.split())
-    outputs = {{{out_port!r}: transformed}}
-    _enforce_postconditions({cid!r}, outputs)
-    return outputs
-'''
-        return func_name, body
-
-    if spec.operation_template in {"text_metric_object", "text_metric_string"}:
-        is_str_summary = spec.operation_template == "text_metric_string"
-        body = f'''def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions({cid!r}, inputs)
-    raw = str(inputs.get({in_port!r}, ""))
-    if not raw.strip():
-        raise ContractViolationError("{cid}: precondition NonEmptyTrimmed({in_port}) violated")
-    mode = str(config.get("mode", {default_mode!r})).lower()
-    kw = str(config.get("keyword", {default_kw!r})).lower()
-    if mode in ("sentence_count", "sentences"):
-        m_key, m_val = "sentences", len([s for s in re.split(r"[.!?]+", raw) if s.strip()])
-    elif mode in ("line_count", "lines"):
-        m_key, m_val = "lines", len([ln for ln in raw.splitlines() if ln.strip()])
-    elif mode in ("digit_count", "digits"):
-        m_key, m_val = "digits", sum(1 for c in raw if c.isdigit())
-    elif mode in ("keyword_count", "keyword"):
-        m_key, m_val = "keyword_hits", raw.lower().count(kw or "amca")
-    else:
-        m_key, m_val = "metric", len(raw.split())
-    if {is_str_summary!r}:
-        outputs = {{{out_port!r}: f"characters={{len(raw)}}; words={{len(raw.split())}}; {{m_key}}={{m_val}}"}}
-    else:
-        outputs = {{{out_port!r}: f"{{m_key}}={{m_val}}"}}
-    _enforce_postconditions({cid!r}, outputs)
-    return outputs
-'''
-        return func_name, body
-
-    if spec.operation_template == "dual_finding_combiner":
-        ports = list(spec.input_ports.keys())
-        p_a = ports[0] if len(ports) >= 1 else "finding_a"
-        p_b = ports[1] if len(ports) >= 2 else "finding_b"
-        body = f'''def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions({cid!r}, inputs)
-    outputs = {{{out_port!r}: f"{{inputs[{p_a!r}]}}; {{inputs[{p_b!r}]}}"}}
-    _enforce_postconditions({cid!r}, outputs)
-    return outputs
-'''
-        return func_name, body
-
-    body = f'''def {func_name}(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions({cid!r}, inputs)
-    tag = str(config.get("tag", {default_tag!r}))
-    outputs = {{{out_port!r}: {{"summary": str(inputs[{in_port!r}]), "tag": tag}}}}
-    _enforce_postconditions({cid!r}, outputs)
-    return outputs
-'''
-    return func_name, body
-
-
 def _render_components_py(candidate: CandidateGraph | None = None) -> str:
+    """Render `src/constructed_machine/components.py` as a library facade over `amca_components`."""
     custom_specs: dict[str, CustomComponentSpec] = {s.component_id: s for s in list_custom_component_specs()}
     if candidate is not None:
         for node in candidate.nodes:
@@ -172,145 +96,48 @@ def _render_components_py(candidate: CandidateGraph | None = None) -> str:
             if spec is not None:
                 custom_specs[spec.component_id] = spec
 
-    custom_funcs_code: list[str] = []
-    dispatch_entries = [
-        '    "input_source": run_input_source,',
-        '    "validate_text": run_validate_text,',
-        '    "analysis_a": run_analysis_a,',
-        '    "analysis_b": run_analysis_b,',
-        '    "aggregate_results": run_aggregate_results,',
-        '    "generate_report": run_generate_report,',
-    ]
+    alias_lines: list[str] = []
     for cid in sorted(custom_specs):
-        fn_name, fn_code = _render_custom_component_function(custom_specs[cid])
-        custom_funcs_code.append(fn_code)
-        dispatch_entries.append(f"    {cid!r}: {fn_name},")
+        safe_id = "".join(c if c.isalnum() else "_" for c in cid)
+        alias_lines.append(f"run_custom_{safe_id} = COMPONENT_DISPATCH[{cid!r}]")
+    alias_block = ("\n" + "\n".join(alias_lines) + "\n") if alias_lines else ""
 
-    custom_section = ("\n\n" + "\n\n".join(custom_funcs_code)) if custom_funcs_code else ""
-    dispatch_block = "COMPONENT_DISPATCH = {\n" + "\n".join(dispatch_entries) + "\n}\n"
-
-    return '''"""Deterministic bounded components with runtime Hoare precondition/postcondition guards."""
+    return f'''"""Library facade binding the constructed machine to the AMCA Component Library (`amca_components`)."""
 from __future__ import annotations
 
-import re
-from typing import Any
-
-
-class ContractViolationError(ValueError):
-    """Raised when a runtime Hoare precondition or postcondition is violated."""
-
-
-def _enforce_preconditions(component_id: str, inputs: dict[str, Any]) -> None:
-    if component_id in {"validate_text", "analysis_a", "analysis_b"}:
-        val = inputs.get("text")
-        if not isinstance(val, str):
-            raise ContractViolationError(f"{component_id}: input 'text' must be a string")
-        if component_id in {"analysis_a", "analysis_b"} and not val.strip():
-            raise ContractViolationError(f"{component_id}: precondition NonEmptyTrimmed(text) violated")
-    elif component_id == "aggregate_results":
-        for port in ("finding_a", "finding_b"):
-            val = inputs.get(port)
-            if not isinstance(val, str) or not val.strip():
-                raise ContractViolationError(f"{component_id}: precondition ValidMetric({port}) violated")
-    elif component_id == "generate_report":
-        val = inputs.get("summary")
-        if not isinstance(val, str) or not val.strip():
-            raise ContractViolationError(f"{component_id}: precondition AggregatedSummary(summary) violated")
-    elif component_id != "input_source":
-        if not inputs:
-            raise ContractViolationError(f"{component_id}: missing required inputs")
-        for p_name, p_val in inputs.items():
-            if isinstance(p_val, str) and not p_val.strip():
-                raise ContractViolationError(f"{component_id}: precondition NonEmpty({p_name}) violated")
-
-
-def _enforce_postconditions(component_id: str, outputs: dict[str, Any]) -> None:
-    if component_id == "input_source":
-        if "text" not in outputs or not isinstance(outputs["text"], str):
-            raise ContractViolationError("input_source: postcondition TypeString(text) violated")
-    elif component_id == "validate_text":
-        val = outputs.get("text")
-        if not isinstance(val, str) or not val.strip():
-            raise ContractViolationError("validate_text: postcondition NonEmptyTrimmed(text) violated")
-    elif component_id in {"analysis_a", "analysis_b"}:
-        val = outputs.get("finding")
-        if not isinstance(val, str) or "=" not in val:
-            raise ContractViolationError(f"{component_id}: postcondition metric format violated")
-    elif component_id == "aggregate_results":
-        val = outputs.get("summary")
-        if not isinstance(val, str) or ";" not in val:
-            raise ContractViolationError("aggregate_results: postcondition AggregatedSummary violated")
-    elif component_id == "generate_report":
-        val = outputs.get("report")
-        if not isinstance(val, dict) or "summary" not in val:
-            raise ContractViolationError("generate_report: postcondition CompleteReport(report) violated")
-    else:
-        if not outputs:
-            raise ContractViolationError(f"{component_id}: postcondition non-empty outputs violated")
-
-
-def run_input_source(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions("input_source", inputs)
-    key = str(config.get("input_key", "text"))
-    if key not in raw_inputs:
-        raise ContractViolationError(f"Missing required input key: {key!r}")
-    val = raw_inputs[key]
-    if not isinstance(val, str):
-        raise ContractViolationError(f"Input {key!r} must be a string")
-    outputs = {"text": val}
-    _enforce_postconditions("input_source", outputs)
-    return outputs
-
-
-def run_validate_text(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions("validate_text", inputs)
-    cleaned = str(inputs["text"]).strip()
-    if not cleaned:
-        raise ContractViolationError("Input text cannot be empty or whitespace-only.")
-    outputs = {"text": cleaned}
-    _enforce_postconditions("validate_text", outputs)
-    return outputs
-
-
-def run_analysis_a(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions("analysis_a", inputs)
-    text = str(inputs["text"])
-    outputs = {"finding": f"characters={len(text)}"}
-    _enforce_postconditions("analysis_a", outputs)
-    return outputs
-
-
-def run_analysis_b(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions("analysis_b", inputs)
-    text = str(inputs["text"])
-    outputs = {"finding": f"words={len(text.split())}"}
-    _enforce_postconditions("analysis_b", outputs)
-    return outputs
-
-
-def run_aggregate_results(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions("aggregate_results", inputs)
-    summary = f"{inputs['finding_a']}; {inputs['finding_b']}"
-    outputs = {"summary": summary}
-    _enforce_postconditions("aggregate_results", outputs)
-    return outputs
-
-
-def run_generate_report(inputs: dict[str, Any], config: dict[str, Any], raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    _enforce_preconditions("generate_report", inputs)
-    outputs = {"report": {"summary": str(inputs["summary"])}}
-    _enforce_postconditions("generate_report", outputs)
-    return outputs
-''' + custom_section + "\n\n" + dispatch_block
+from amca_components import (
+    COMPONENT_DISPATCH,
+    ContractViolationError,
+    _enforce_postconditions,
+    _enforce_preconditions,
+    execute_library_component,
+    run_aggregate_results,
+    run_analysis_a,
+    run_analysis_b,
+    run_generate_report,
+    run_input_source,
+    run_validate_text,
+)
+{alias_block}
+__all__ = [
+    "COMPONENT_DISPATCH",
+    "ContractViolationError",
+    "_enforce_postconditions",
+    "_enforce_preconditions",
+    "execute_library_component",
+    "run_aggregate_results",
+    "run_analysis_a",
+    "run_analysis_b",
+    "run_generate_report",
+    "run_input_source",
+    "run_validate_text",
+]
+'''
 
 
 def expected_reference_final_output(candidate: CandidateGraph) -> dict[str, Any]:
     """Compute the deterministic expected final_output of the sink node for reference input 'AMCA builds a graph.'."""
     input_key = _detect_input_key(candidate)
-    comp_ns: dict[str, Any] = {}
-    exec(_render_components_py(candidate), comp_ns)
-    dispatch = comp_ns["COMPONENT_DISPATCH"]
-
     order = _topological_sort(candidate) or [n.id for n in candidate.nodes]
     node_map = {n.id: n for n in candidate.nodes}
     incoming_by_target: dict[str, list[Any]] = {n.id: [] for n in candidate.nodes}
@@ -324,8 +151,7 @@ def expected_reference_final_output(candidate: CandidateGraph) -> dict[str, Any]
         node_inputs: dict[str, Any] = {}
         for edge in incoming_by_target.get(nid, []):
             node_inputs[edge.input] = state[edge.source][edge.output]
-        fn = dispatch[node.component]
-        state[nid] = fn(node_inputs, dict(node.config), raw_inputs)
+        state[nid] = execute_library_component(node.component, node_inputs, dict(node.config), raw_inputs)
     return state[order[-1]]
 
 
@@ -343,7 +169,7 @@ def _render_pipeline_py(candidate: CandidateGraph) -> str:
         "",
         "from typing import Any",
         "",
-        "from .components import COMPONENT_DISPATCH",
+        "from amca_components import COMPONENT_DISPATCH, ContractViolationError, execute_library_component",
         "",
         f"MACHINE_ID = {candidate.machine_id!r}",
         f"TOPOLOGY_CLASS = {topology_class!r}",
@@ -374,9 +200,8 @@ def _render_pipeline_py(candidate: CandidateGraph) -> str:
         "    config: dict[str, Any],",
         "    raw_inputs: dict[str, Any],",
         ") -> dict[str, Any]:",
-        '    """Execute a single verified component node and record its output ports."""',
-        "    fn = COMPONENT_DISPATCH[component_id]",
-        "    out = fn(node_inputs, config, raw_inputs)",
+        '    """Execute a single verified component node from the AMCA Component Library (`amca_components`)."""',
+        "    out = execute_library_component(component_id, node_inputs, config, raw_inputs)",
         "    state[node_id] = out",
         "    return out",
         "",
@@ -470,7 +295,7 @@ SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from constructed_machine.components import ContractViolationError
+from amca_components import ContractViolationError
 from constructed_machine.pipeline import MACHINE_ID, TOPOLOGICAL_ORDER, TOPOLOGY_CLASS, run_machine
 
 
@@ -539,6 +364,25 @@ def build_constructed_project(
         json.dumps(certificate.as_dict(), indent=2, sort_keys=True) + "\n",
     )
 
+    # Bundle the AMCA Component Library (`amca_components`) into `src/amca_components/`
+    lib_src_dir = ROOT / "src" / "amca_components"
+    _write("src/amca_components/__init__.py", (lib_src_dir / "__init__.py").read_text(encoding="utf-8"))
+    _write("src/amca_components/contracts.py", (lib_src_dir / "contracts.py").read_text(encoding="utf-8"))
+    _write("src/amca_components/builtin.py", (lib_src_dir / "builtin.py").read_text(encoding="utf-8"))
+    _write(
+        "src/amca_components/catalog.json",
+        json.dumps(get_library_catalog_snapshot(), indent=2, sort_keys=True) + "\n",
+    )
+    _write("src/amca_components/custom/__init__.py", (lib_src_dir / "custom" / "__init__.py").read_text(encoding="utf-8"))
+
+    custom_specs: dict[str, CustomComponentSpec] = {s.component_id: s for s in list_custom_component_specs()}
+    for node in candidate.nodes:
+        spec = get_custom_component_spec(node.component)
+        if spec is not None:
+            custom_specs[spec.component_id] = spec
+    for cid in sorted(custom_specs):
+        _write(f"src/amca_components/custom/{cid}.py", render_library_module_for_spec(custom_specs[cid]))
+
     init_code = (
         '"""Constructed AMCA machine package."""\n'
         "from .pipeline import MACHINE_ID, CANDIDATE_SHA256, SPECIFICATION_SHA256, run_machine\n\n"
@@ -552,7 +396,7 @@ def build_constructed_project(
 
     readme_content = f"""# Constructed Machine: `{candidate.machine_id}` (Revision {revision:03d})
 
-Generated by **AMCA Local Independent Version** Bounded Project Builder.
+Generated by **AMCA Local Independent Version** Bounded Project Builder using the **AMCA Component Library (`amca_components`)**.
 
 - **Machine ID**: `{candidate.machine_id}`
 - **Specification SHA-256**: `{candidate.specification_sha256}`

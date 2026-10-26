@@ -1,6 +1,6 @@
 # AMCA User Manual (Rincian Teknis & Acuan Verifikasi Sistem — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.2.0` (Mencakup Baseline `v0.1.0` dan Versi Lokal Mandiri `v0.2.0`)  
+**Versi Dokumen:** `0.3.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, dan Pustaka Komponen Kumulatif & On-The-Fly Code Agent `v0.3.0`)  
 **Bahasa:** Indonesia  
 **Status:** Kontrak Referensi Teknis & Orakel Verifikasi Implementasi (*Verification Oracle*)
 
@@ -21,7 +21,8 @@
 
 | Aspek Teknis | Spesifikasi Versi Lokal Mandiri |
 | :--- | :--- |
-| **Paket Python** | `src/amca/` (inti deterministik) + `src/amca_agent/` (Harness, Formal Verifier, Builder, Packager, CLI) + `app.py` (GUI Streamlit) |
+| **Paket Python** | `src/amca/` (inti deterministik) + `src/amca_components/` (Pustaka Komponen Kumulatif) + `src/amca_agent/` (Harness, Binder, Synthesizer, Formal Verifier, Builder, Packager, CLI) + `app.py` (GUI Streamlit) |
+| **Pustaka Komponen Kumulatif (`amca_components`)** | Tersimpan di `src/amca_components/` (`catalog.json`, `contracts.py`, `builtin.py`, `custom/`), dipanggil langsung oleh `pipeline.py`, dan dibundel ke paket Handover ZIP |
 | **Tempat Eksekusi UI & CLI** | 100% lokal di laptop (`streamlit run app.py` & `python -m amca_agent.cli`) |
 | **Inspeksi Spek Laptop (`hardware.py`)** | Berjalan lokal di `src/amca_agent/hardware.py` (RAM, Disk, CPU, GPU/VRAM) |
 | **Koneksi Ollama / LM Studio / OpenCode / 9Router Lokal** | Langsung dari `src/amca_agent/provider.py` ke `127.0.0.1` |
@@ -138,6 +139,53 @@ AMCA mendukung dua format spesifikasi yang saling kompatibel:
 
 > **Catatan Referensi Perilaku Deterministik:** Untuk berkas contoh `examples/valid_parallel_analysis.yaml` dengan masukan `examples/reference-input.json` (`{"text": "AMCA builds a graph."}`), hasil eksekusi wajib menghasilkan ringkasan `characters=20; words=4`.
 
+### 7.2 Arsitektur Pustaka Komponen Kumulatif (`src/amca_components/`)
+
+Untuk mendukung keterpisahan logika komponen dari kode perakitan mesin (*decoupled architecture*), AMCA memelihara pustaka komponen kumulatif di `src/amca_components/`:
+1. **`catalog.json`**: Katalog tunggal yang menyimpan metadata seluruh komponen terdaftar (6 komponen inti bawaan ditambah seluruh komponen kustom yang diikat atau disintesis).
+2. **`contracts.py`**: Modul sentral evaluasi predikat Hoare dan pembuktian kontrak runtime (`check_predicate`, `assert_preconditions`, `assert_postconditions`).
+3. **`builtin.py`**: Implementasi kanonis 6 komponen inti (`run_input_source`, `run_validate_text`, `run_analysis_a`, `run_analysis_b`, `run_aggregate_results`, `run_generate_report`).
+4. **`custom/`**: Subdirektori modul Python mandiri untuk setiap komponen kustom yang berhasil diverifikasi dan diikat ke sistem.
+5. **Pola Impor Pustaka pada Kode Mesin Nyata (`pipeline.py`)**:
+   Kode mesin yang dihasilkan oleh `builder.py` memanggil komponen langsung sebagai pustaka:
+   ```python
+   from amca_components import run_input_source, run_validate_text, run_analysis_a, run_analysis_b, run_aggregate_results, run_generate_report
+   ```
+6. **Bundling Mandiri pada Handover ZIP**:
+   Saat mengonstruksi proyek ke dalam arsip `.zip`, direktori `src/amca_components/` otomatis disalin ke dalam `project_dir / "src" / "amca_components/"` sehingga proyek hasil unduhan dapat dijalankan secara mandiri (*standalone*) di mana pun tanpa ketergantungan eksternal.
+
+### 7.3 Pengikatan Komponen Eksternal & Gerbang Keamanan AST Statis (`component_binder.py`)
+
+AMCA mendukung pengikatan berkas Python (`.py`) yang dibuat dari luar (misalnya dari Antigravity, OpenCode, Codex, atau editor manual pengguna):
+1. **Format Input yang Didukung**:
+   - **Format A (Metadata Eksplisit)**: Modul mendefinisikan kamus `COMPONENT_META` berisi id, port input/output, konfigurasi, dan kontrak Hoare, serta fungsi kanonis `run_<id>(inputs, config)`.
+   - **Format B (Fungsi Python Murni)**: Fungsi Python standar (mis. `def calculate_score(text: str) -> dict:`) yang dianalisis oleh AMCA untuk menyimpulkan port, tipe, dan kontrak secara otomatis.
+2. **Gerbang Keamanan AST Statis (*Static AST Security Gate* — `audit_component_source_ast`)**:
+   Sebelum kode eksternal diizinkan masuk ke lingkungan eksekusi, AMCA mem-parsing pohon sintaksis abstrak (AST) dan menolak keras (*fail-closed*) jika ditemukan:
+   - Impor berbahaya: `os`, `sys`, `subprocess`, `socket`, `requests`, `shutil`, `ctypes`, `importlib`.
+   - Pemanggilan berbahaya: `eval`, `exec`, `open`, `compile`, `globals`, `locals`, `__import__`.
+   - Akses atribut privat berbahaya: `__subclasses__`, `__globals__`, `__code__`, `__builtins__`.
+3. **Pembungkusan Kontrak Hoare Kanonis (*Canonical Contract Wrapping*)**:
+   Kode sumber dibungkus ke dalam modul mandiri di `src/amca_components/custom/<id>.py` lengkap dengan *runtime contract guards* yang menegakkan prasyarat sebelum eksekusi dan pascakondisi setelah eksekusi.
+4. **Sandbox Verifikasi Perilaku (*Behavior Sandbox*)**:
+   Komponen diuji secara nyata dengan masukan valid dan masukan kosong/cacat untuk memastikan tidak menimbulkan eksepsi tak terduga dan mematuhi kontrak tipe secara ketat sebelum didaftarkan ke `catalog.json`.
+
+### 7.4 Sintesis Komponen *On-The-Fly* oleh Code Agent (`component_synthesizer.py`)
+
+Ketika pengguna meminta mesin dengan kapabilitas baru di dalam sesi chat, atau ketika LLM merancang kandidat YAML yang memuat nama komponen yang belum ada di dalam katalog:
+1. **Deteksi Komponen Tak Terdaftar & Propagasi Batasan Hoare Dua Arah**:
+   Modul `component_synthesizer.py` memindai seluruh node YAML terhadap katalog. Untuk setiap komponen tak terdaftar, algoritma propagasi batasan menelusuri sisi graf yang terhubung:
+   - Menarik tipe port dan pascakondisi dari node sumber pendahulu ($u \to v$) untuk menjadi prasyarat masuk ($P_v$).
+   - Mendeduksi tipe port dan prasyarat dari node muara penerus ($v \to w$) untuk menjadi pascakondisi wajib ($Q_v$) agar teorema $Q_v \supseteq P_w$ terbukti.
+2. **Jeda Persetujuan Pengguna (*Human-in-the-Loop HITL*)**:
+   AMCA menghentikan sementara proses dan menampilkan daftar komponen yang perlu disintesis kepada pengguna beserta rencana kontraknya.
+3. **Sintesis Kode oleh Code Agent (`synthesize_component_python_code`)**:
+   Setelah pengguna menyetujui (`synthesize` / `approve-components`), Code Agent AMCA (menggunakan LLM yang sedang aktif atau fallback deterministik) menghasilkan kode Python lengkap untuk komponen tersebut.
+4. **Pengikatan & Registrasi Otomatis**:
+   Kode hasil sintesis dialirkan ke `component_binder.py` untuk melewati Gerbang Keamanan AST, pembungkusan kontrak Hoare, uji sandbox perilaku, dan pendaftaran ke `src/amca_components/` serta `artifacts/custom_components/custom_registry.json`.
+5. **Verifikasi Ulang & Kesiapan Konstruksi**:
+   Setelah seluruh komponen terikat, kandidat YAML diverifikasi ulang. Status langsung beralih ke `verified` dan Sertifikat Bukti Formal menjadi **`PROVED`**, sehingga mesin siap dibangun dan dikemas ke dalam Handover ZIP.
+
 ---
 
 ## 8. Mesin Verifikasi Formal 3-Tahap (`formal_verifier.py`)
@@ -201,6 +249,8 @@ $env:PYTHONPATH = "src"
   - `& $PY -m amca_agent.cli components [--json] [--output <path>]` — Menampilkan **Katalog Komponen Terdaftar & Panduan Batasan Prompt** (mencakup 6 komponen inti bawaan + seluruh komponen kustom yang telah didaftarkan beserta port masuk/keluar, kunci konfigurasi, prasyarat/pascakondisi Hoare, dan aturan batasan prompt untuk Mesin Tunggal, Pipeline Linier, maupun Graf Nonlinier).
   - `& $PY -m amca_agent.cli register-component --id <component_id> [--alias <alias>] [--name <nama>] [--role <deskripsi>] [--template text_transform|text_metric_object|text_metric_string|dual_finding_combiner|report_packager] [--mode <mode>]` — Membuat dan mendaftarkan komponen deterministik baru ke Registry AMCA (`artifacts/custom_components/custom_registry.json`), lengkap dengan kontrak Hoare dan generator kode AST Stage 3.
   - `& $PY -m amca_agent.cli unregister-component --id <component_id>` — Menghapus komponen kustom dari registry (6 komponen inti bawaan tidak dapat dihapus atau ditimpa).
+  - `& $PY -m amca_agent.cli bind-component --source <file.py> [--id <id>] [--name <name>]` — Mengikat berkas komponen Python eksternal (dari Antigravity, OpenCode, Codex, dll.) melalui Gerbang Keamanan AST Statis, pembungkus kontrak Hoare kanonis, dan sandbox verifikasi perilaku ke dalam pustaka kumulatif `src/amca_components/`.
+  - `& $PY -m amca_agent.cli synthesize-missing <spec.yaml> [--provider <provider>] [--model <model>]` — Memindai komponen tak terdaftar pada spesifikasi YAML, menjalankan propagasi batasan Hoare dua arah, mensintesis kode komponen Python, dan mengikatnya secara otomatis ke pustaka komponen.
 - **Contoh, Validasi, Verifikasi Formal, & Graf**:
   - `& $PY -m amca_agent.cli examples`
   - `& $PY -m amca_agent.cli example valid_parallel_analysis --output machine.yaml`
@@ -211,6 +261,7 @@ $env:PYTHONPATH = "src"
   - `& $PY -m amca_agent.cli chat [--provider <provider>] [--model <model_or_combo>] [--example <name>] [--session <id>]`
   - Perintah di dalam prompt interaktif `amca>`:
     - `components` — Menampilkan tabel **Katalog Komponen Terdaftar & Panduan Batasan Prompt** secara langsung di dalam sesi chat.
+    - `synthesize` / `approve-components` — Menyetujui dan menjalankan sintesis kode *on-the-fly* untuk komponen tak terdaftar yang direncanakan di dalam YAML revisi aktif, mengikatnya ke pustaka komponen, dan memverifikasi ulang kandidat.
     - `register-component <id> <deskripsi>` — Mendraft dan mendaftarkan komponen baru secara langsung dari sesi interaktif.
     - `setup` — Membuka pengaturan *Preliminary Harness* / mengganti provider, API key, 9Router Combo, atau AMCA Combo secara *on-the-fly*.
     - `hardware` — Menampilkan status spesifikasi perangkat keras laptop saat ini.
@@ -259,3 +310,6 @@ Saat aplikasi selesai dibangun, verifikator wajib mencentang seluruh butir berik
 - [x] **VO-04**: Saat Subworker diusulkan, muncul prompt *On-The-Fly Subworker HITL* yang mengizinkan pemasukan API key/model/Combo berbeda untuk Subworker atau jatuh kembali (*fallback*) ke Agent Utama bila ditolak.
 - [x] **VO-05**: `formal_verifier.py` menjalankan pembuktian nyata Stage 1 (`FO-TOP-01`, `FO-CON-01`, `FO-HOA-01`, `FO-GOAL-01`, `FO-SEC-01`), Stage 2 (invarian revisi), dan Stage 3 (`ast.parse()` isomorfisme $G_{\text{code}} \cong G_{\text{yaml}}$ `FO-REF-01` & guard `FO-REF-02`) serta menerbitkan `formal-proof-certificate.json`.
 - [x] **VO-06**: Seluruh perintah CLI dan alur GUI yang tertulis di `USER_MANUAL.md`, `USER_GUIDE.md`, dan `USER_TUTORIAL.md` berjalan sesuai dokumentasi, dan setiap penambahan fitur baru telah disinkronkan kembali ke ketiga buku ini.
+- [x] **VO-07**: Pustaka Komponen Kumulatif `amca_components` aktif di `src/amca_components/`, seluruh kode mesin nyata (`pipeline.py`) memanggil fungsi komponen secara langsung sebagai pustaka (`from amca_components import ...`), dan direktori pustaka ikut dibundel utuh ke dalam Handover ZIP.
+- [x] **VO-08**: Gerbang Keamanan AST Statis (`component_binder.py`) memblokir modul berbahaya (`os`, `subprocess`, `socket`) secara fail-closed, membungkus fungsi Python eksternal dengan kontrak Hoare kanonis, memvalidasi perilakunya di sandbox, dan mendaftarkannya ke `catalog.json`.
+- [x] **VO-09**: Sintesis Komponen *On-The-Fly* (`component_synthesizer.py`) mendeduksi prasyarat/pascakondisi Hoare melalui propagasi batasan dua arah pada DAG, meminta persetujuan pengguna (HITL), mensintesis kode komponen baru secara dinamis, mengikatnya ke pustaka, serta memverifikasi ulang kandidat hingga mencapai status `verified` dan `PROVED` (Stage 1, 2, dan 3).

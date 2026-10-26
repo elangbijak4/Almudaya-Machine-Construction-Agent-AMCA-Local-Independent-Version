@@ -56,7 +56,7 @@ Strict rules for schema_version "1.0":
 - `schema_version` MUST be the quoted string `"1.0"`.
 - `machine_id` and all node `id` values MUST match `[a-z][a-z0-9_-]{0,63}`.
 - `nodes` MUST be a YAML sequence (list) of objects with keys `id`, `component`, `config`.
-- Allowed `component` values for v1.0 are ONLY: `input_source` (config `{"input_key": "text"}`), `validate_text` (`{}`), `analysis_a` (`{}`), `analysis_b` (`{}`), `aggregate_results` (`{}`), `generate_report` (`{}`).
+- Registered `component` values for v1.0 are: `input_source` (config `{"input_key": "text"}`), `validate_text` (`{}`), `analysis_a` (`{}`), `analysis_b` (`{}`), `aggregate_results` (`{}`), `generate_report` (`{}`), plus any user-registered custom components listed below. The ONLY exception is described in "On-The-Fly Component Planning" below.
 - `edges` MUST be a YAML sequence (list) of objects with keys `from`, `out`, `to`, `in`.
 - For formal Hoare verification (`FO-HOA-01`) to pass, `input_source` output `text` MUST pass through `validate_text` BEFORE connecting to `analysis_a` and `analysis_b`."""
 
@@ -300,22 +300,128 @@ def discover_provider_models(
     return []
 
 
+NEW_COMPONENT_PLANNING_RULES = """
+On-The-Fly Component Planning (v0.3):
+- ALWAYS prefer components already listed in the registered catalog above.
+- ONLY IF the user's request explicitly needs a processing/analysis step that no registered component provides
+  (or the user explicitly asks for a new component), you MAY add a node whose `component` is a NEW identifier
+  matching `^[a-z][a-z0-9_]{0,63}$` (use underscores, never hyphens), e.g. `html_tag_stripper`, `sentiment_analyzer`.
+- Wire every new node with explicit `edges` (`from`, `out`, `to`, `in`) and place text-processing nodes AFTER `validate_text`.
+- Use port names consistently: text transforms use `in: text` / `out: text`; analyzers emit `out: finding` (object);
+  a new analyzer may feed `aggregate_results` via `finding_a` or `finding_b`.
+- AMCA will show unregistered components to the user for approval, then synthesize and bind their Python code.
+"""
+
+
 def build_dynamic_system_prompt() -> str:
-    """Return SYSTEM_PROMPT enriched with any user-registered custom components."""
+    """Return SYSTEM_PROMPT enriched with user-registered custom components and new-component planning rules."""
     custom_specs = list_custom_component_specs()
-    if not custom_specs:
-        return SYSTEM_PROMPT
-    extra_lines = [
-        "",
-        "Additional User-Registered Custom Components (also allowed in `nodes[].component`):",
-    ]
-    for spec in custom_specs:
-        extra_lines.append(
-            f"- `{spec.component_id}` (alias `{spec.alias}`): inputs={spec.input_ports}, "
-            f"outputs={spec.output_ports}, config_keys={list(spec.config_keys)}, "
-            f"default_config={spec.default_config}, role={spec.role!r}"
+    extra_lines: list[str] = []
+    if custom_specs:
+        extra_lines.extend(
+            [
+                "",
+                "Additional User-Registered Custom Components (also allowed in `nodes[].component`):",
+            ]
         )
-    return SYSTEM_PROMPT + "\n" + "\n".join(extra_lines)
+        for spec in custom_specs:
+            extra_lines.append(
+                f"- `{spec.component_id}` (alias `{spec.alias}`): inputs={spec.input_ports}, "
+                f"outputs={spec.output_ports}, config_keys={list(spec.config_keys)}, "
+                f"default_config={spec.default_config}, role={spec.role!r}"
+            )
+    return SYSTEM_PROMPT + "\n" + "\n".join(extra_lines) + "\n" + NEW_COMPONENT_PLANNING_RULES
+
+
+NEW_COMPONENT_INTENT_PHRASES: tuple[str, ...] = (
+    "komponen baru",
+    "new component",
+    "buat komponen",
+    "create component",
+    "komponen tak terdaftar",
+    "komponen belum terdaftar",
+    "unregistered component",
+)
+
+NEW_COMPONENT_CAPABILITY_NAMES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("html", "tag html"), "html_tag_stripper"),
+    (("email", "surel"), "email_extractor"),
+    (("sentimen", "sentiment"), "sentiment_analyzer"),
+    (("tanda baca", "punctuation"), "punctuation_cleaner"),
+    (("angka", "digit", "number"), "number_extractor"),
+)
+
+ANALYZER_NAME_HINTS: tuple[str, ...] = ("analy", "extract", "score", "count", "detect", "metric")
+
+
+def detect_requested_new_component(prompt: str) -> str | None:
+    """Return the (new or previously synthesized) component_id requested in `prompt`, else None.
+
+    Only triggers when the prompt contains an explicit new-component intent phrase. Built-in
+    component identifiers are never returned.
+    """
+    from amca.registry import BUILTIN_COMPONENT_IDS
+    import re as _re
+
+    lower_prompt = prompt.lower()
+    intent_positions = [lower_prompt.find(p) for p in NEW_COMPONENT_INTENT_PHRASES if p in lower_prompt]
+    if not intent_positions:
+        return None
+    builtin = set(BUILTIN_COMPONENT_IDS)
+    reserved = {"schema_version", "machine_id", "input_key"}
+    start = min(intent_positions)
+    for window in (lower_prompt[start : start + 160], lower_prompt):
+        for match in _re.finditer(r"`?\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b`?", window):
+            candidate = match.group(1)[:64]
+            if candidate in builtin or candidate in reserved or candidate.endswith("_text"):
+                continue
+            return candidate
+    for keywords, cid in NEW_COMPONENT_CAPABILITY_NAMES:
+        if any(k in lower_prompt for k in keywords):
+            return cid
+    return "custom_text_step"
+
+
+def _new_component_yaml(machine_id: str, input_key: str, cid: str) -> str:
+    """Build a v1.0 YAML document that wires a new (unregistered) component into the reference DAG."""
+    nodes = [
+        {"id": "input", "component": "input_source", "config": {"input_key": input_key}},
+        {"id": "validate", "component": "validate_text", "config": {}},
+    ]
+    if any(h in cid for h in ANALYZER_NAME_HINTS):
+        nodes += [
+            {"id": "analysis_a", "component": "analysis_a", "config": {}},
+            {"id": "new_analysis", "component": cid, "config": {}},
+            {"id": "aggregate", "component": "aggregate_results", "config": {}},
+            {"id": "report", "component": "generate_report", "config": {}},
+        ]
+        edges = [
+            {"from": "input", "out": "text", "to": "validate", "in": "text"},
+            {"from": "validate", "out": "text", "to": "analysis_a", "in": "text"},
+            {"from": "validate", "out": "text", "to": "new_analysis", "in": "text"},
+            {"from": "analysis_a", "out": "finding", "to": "aggregate", "in": "finding_a"},
+            {"from": "new_analysis", "out": "finding", "to": "aggregate", "in": "finding_b"},
+            {"from": "aggregate", "out": "summary", "to": "report", "in": "summary"},
+        ]
+    else:
+        nodes += [
+            {"id": "new_step", "component": cid, "config": {}},
+            {"id": "analysis_a", "component": "analysis_a", "config": {}},
+            {"id": "analysis_b", "component": "analysis_b", "config": {}},
+            {"id": "aggregate", "component": "aggregate_results", "config": {}},
+            {"id": "report", "component": "generate_report", "config": {}},
+        ]
+        edges = [
+            {"from": "input", "out": "text", "to": "validate", "in": "text"},
+            {"from": "validate", "out": "text", "to": "new_step", "in": "text"},
+            {"from": "new_step", "out": "text", "to": "analysis_a", "in": "text"},
+            {"from": "new_step", "out": "text", "to": "analysis_b", "in": "text"},
+            {"from": "analysis_a", "out": "finding", "to": "aggregate", "in": "finding_a"},
+            {"from": "analysis_b", "out": "finding", "to": "aggregate", "in": "finding_b"},
+            {"from": "aggregate", "out": "summary", "to": "report", "in": "summary"},
+        ]
+    doc = {"schema_version": "1.0", "machine_id": machine_id, "nodes": nodes, "edges": edges}
+    return yaml.safe_dump(doc, sort_keys=False).strip()
 
 
 def synthesize_deterministic_yaml(
@@ -405,6 +511,10 @@ def synthesize_deterministic_yaml(
             }
             return yaml.safe_dump(doc, sort_keys=False).strip()
 
+    requested_new_cid = detect_requested_new_component(prompt) if output_format == "v1" else None
+    if requested_new_cid:
+        return _new_component_yaml(machine_id, input_key, requested_new_cid)
+
     if any(tok in lower_prompt for tok in ("mesin tunggal", "single machine", "single_machine")) and output_format == "v1":
         template_single = (ROOT / "examples" / "valid_single_machine.yaml").read_text(encoding="utf-8")
         template_single = template_single.replace('machine_id: "single-text-reader"', f'machine_id: "{machine_id}"', 1)
@@ -464,6 +574,56 @@ def generate_yaml(
     context.append("Latest user request (untrusted requirements):\n" + prompt[:8_000])
     joined = "\n\n".join(context)
     dynamic_prompt = build_dynamic_system_prompt()
+
+    content = complete_text(
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        system_prompt=dynamic_prompt,
+        user_content=joined,
+        base_url=base_url,
+    )
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            content = "\n".join(lines[1:-1]).strip()
+    return content
+
+
+OFFLINE_PROVIDER_NAMES: frozenset[str] = frozenset(
+    {"offline deterministic", "offline_deterministic", "local model", "local_model", ""}
+)
+
+
+def is_offline_provider(provider: str) -> bool:
+    """Return True when `provider` has no remote/LLM transport (deterministic synthesizers only)."""
+    return provider.strip().lower() in OFFLINE_PROVIDER_NAMES
+
+
+def complete_text(
+    *,
+    provider: str,
+    model: str,
+    api_key: str,
+    system_prompt: str,
+    user_content: str,
+    base_url: str | None = None,
+) -> str:
+    """Send one system+user completion request to any supported real LLM provider and return raw text.
+
+    Shared transport for YAML authoring (`generate_yaml`) and the On-The-Fly Code Agent
+    (`component_synthesizer`). Raises `ProviderError` with a fallback `trigger_reason` on failure.
+    """
+    norm = provider.strip().lower()
+    if is_offline_provider(provider):
+        raise ProviderError(
+            f"Provider {provider!r} tidak memiliki transport model AI (mode deterministik lokal).",
+            trigger_reason="provider_offline",
+        )
+    if (provider in PROVIDER_REQUIRES_KEY or norm in PROVIDER_REQUIRES_KEY) and not api_key.strip():
+        raise ProviderError("API key belum diisi.")
+    dynamic_prompt = system_prompt
+    joined = user_content
 
     if provider == "Gemini" or norm == "gemini":
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -599,10 +759,5 @@ def generate_yaml(
             raise ProviderError("Format respons API kompatibel tidak dikenali.") from None
 
     if not isinstance(content, str) or not content.strip():
-        raise ProviderError("Model mengembalikan YAML kosong.")
-    content = content.strip()
-    if content.startswith("```"):
-        lines = content.splitlines()
-        if len(lines) >= 3 and lines[-1].strip() == "```":
-            content = "\n".join(lines[1:-1]).strip()
-    return content
+        raise ProviderError("Model mengembalikan respons kosong.")
+    return content.strip()

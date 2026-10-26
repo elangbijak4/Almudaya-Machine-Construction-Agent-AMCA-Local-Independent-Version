@@ -1,7 +1,7 @@
 # AMCA User Tutorial (Tutorial Praktik Langkah-demi-Langkah & Skenario Verifikasi — Versi Lokal Mandiri)
 
-**Versi Dokumen:** `0.2.0` · **Bahasa:** Indonesia  
-**Peran Dokumen:** Panduan *hands-on* langkah demi langkah dari tingkat dasar hingga tingkat lanjut (9Router/Combo Fallback, Hardware Gate, Subworker HITL, 3-Stage Formal Verification, dan Handover ZIP), sekaligus skenario uji terima (*Acceptance Test Scenarios*) saat verifikasi aplikasi Versi Lokal Mandiri.
+**Versi Dokumen:** `0.3.0` (Mencakup Baseline `v0.1.0`, Versi Lokal Mandiri `v0.2.0`, dan Pustaka Komponen Kumulatif & On-The-Fly Code Agent `v0.3.0`) · **Bahasa:** Indonesia  
+**Peran Dokumen:** Panduan *hands-on* langkah demi langkah dari tingkat dasar hingga tingkat lanjut (9Router/Combo Fallback, Hardware Gate, Subworker HITL, 3-Stage Formal Verification, Pustaka Komponen Kumulatif, Pengikatan Komponen Eksternal, Sintesis On-The-Fly Code Agent, dan Handover ZIP), sekaligus skenario uji terima (*Acceptance Test Scenarios*) saat verifikasi aplikasi Versi Lokal Mandiri.
 
 ---
 
@@ -187,6 +187,95 @@ Tutorial ini memandu Anda menambahkan komponen deterministik baru di luar 6 komp
 4. **Bangun YAML dan Konstruksi Paket Proyek Mandiri (`.zip`) dengan Komponen Baru**:
    Di dalam sesi `chat` (`& $PY -m amca_agent.cli chat --provider "Offline Deterministic"`), masukkan prompt:
    > *"Buat pipeline `machine_id: custom_sentence_machine` menggunakan `sentence_counter` setelah `validate_text`."*
-   Lalu jalankan `approve-spec`, `plan`, `approve-construction`, dan `construct`. Proyek mandiri yang dihasilkan di `artifacts/constructed_projects/custom_sentence_machine-rev001/` dan arsip `.zip`-nya akan memuat fungsi `run_custom_sentence_counter` beserta *runtime Hoare guard*-nya dan lulus **Stage 3 AST Proof (`PROVED`)**!
+   Lalu jalankan `approve-spec`, `plan`, `approve-construction`, dan `construct`. Proyek mandiri yang dihasilkan di `artifacts/constructed_projects/custom_sentence_machine-rev001/` dan arsip `.zip`-nya akan memuat pemanggilan `from amca_components import run_sentence_counter` beserta bundel snapshot `src/amca_components/` dan lulus **Stage 3 AST Proof (`PROVED`)**!
+
+---
+
+## Tutorial 7: Mengikat Komponen Eksternal dari Antigravity / OpenCode / Codex Melalui Gerbang Keamanan AST & CLI/GUI
+
+Tutorial ini memandu Anda mengikat kode komponen Python yang Anda buat secara terpisah (misalnya menggunakan Antigravity, OpenCode, Codex, atau editor IDE Anda sendiri) ke dalam pustaka kumulatif AMCA.
+
+### Langkah 1 — Menyiapkan Berkas Kode Komponen Python Eksternal
+Buat berkas Python, misalnya `my_external_component.py`:
+```python
+def extract_hashtags(text: str) -> dict:
+    import re
+    tags = re.findall(r"#\w+", text)
+    return {"hashtag_count": len(tags), "status": "processed"}
+```
+
+### Langkah 2 — Menguji Gerbang Keamanan AST Statis (Uji Negatif)
+Jika berkas memuat pustaka berbahaya (misal `import os; os.system("dir")`):
+```powershell
+& $PY -m amca_agent.cli bind-component --source malicious_component.py
+```
+- **Hasil yang Wajib Terverifikasi**:
+  - AMCA menolak pendaftaran secara keras (*fail-closed*): `Blocked dangerous import 'os' at line ...`.
+  - Berkas tidak dimasukkan ke dalam registri atau pustaka komponen.
+
+### Langkah 3 — Mengikat Komponen Bersih ke Pustaka AMCA
+Ikat berkas `my_external_component.py` yang aman:
+```powershell
+& $PY -m amca_agent.cli bind-component --source my_external_component.py --id hashtag_extractor --name "Hashtag Extractor"
+```
+*(Di GUI `app.py`, buka **Bagian 8 · Pembuat & Pendaftar Komponen Baru** $\to$ pilih tab **Ikat Berkas Komponen Eksternal (.py)**, pilih berkas, lalu klik **Audit Keamanan & Ikat Komponen**).*
+- **Hasil yang Wajib Terverifikasi**:
+  - Gerbang Keamanan AST meloloskan kode (`AST security audit: PASSED`).
+  - AMCA membungkus fungsi dengan *runtime Hoare guards* kanonis.
+  - Komponen berhasil diuji di sandbox (`Sandbox self-test: PASSED`).
+  - Modul tersimpan di `src/amca_components/custom/hashtag_extractor.py` dan terdaftar di `catalog.json` serta `artifacts/custom_components/custom_registry.json`.
+
+---
+
+## Tutorial 8: Sintesis Komponen *On-The-Fly* oleh Code Agent di Tengah Alur Chat/YAML, Persetujuan HITL, & Paket ZIP
+
+Tutorial ini memandu alur rekayasa tingkat lanjut: ketika spesifikasi mesin membutuhkan komponen yang belum ada di dalam katalog, AMCA bertindak sebagai **Code Agent** yang mensintesis kode komponen baru secara dinamis (*on-the-fly*), meminta persetujuan Anda (*Human-in-the-Loop*), mengikatnya ke pustaka, dan mengonstruksi proyek lengkap hingga siap unduh:
+
+### Langkah 1 — Memulai Sesi Interaktif Chat
+```powershell
+& $PY -m amca_agent.cli chat --provider "Offline Deterministic"
+```
+
+### Langkah 2 — Meminta Mesin dengan Komponen Baru
+Ketika muncul pertanyaan ***“Mesin/agent apakah yang Anda ingin buat?”***, masukkan prompt:
+> *"Buat mesin pembersih teks dan penghitung baris dengan urutan input_source -> line_counter -> generate_report."*
+
+### Langkah 3 — Deteksi Komponen Tak Terdaftar & Jeda Persetujuan HITL
+AMCA mendeteksi bahwa `line_counter` belum terdaftar di dalam katalog, menjalankan **Propagasi Batasan Hoare Dua Arah** dari node input ke node muara, lalu menampilkan notifikasi:
+```text
+[AMCA ON-THE-FLY COMPONENT PLANNER]
+Terdeteksi 1 komponen tak terdaftar dalam rencana YAML:
+  - line_counter (inputs: text, outputs: finding)
+Ketik 'synthesize' atau 'approve-components' untuk menyetujui pembuatan kode komponen ini.
+```
+*(Di GUI `app.py`, sebuah kartu kuning interaktif **Sintesis Komponen Baru On-The-Fly** akan muncul secara otomatis di Bagian 3).*
+
+### Langkah 4 — Menyetujui Sintesis Kode Komponen
+Ketik perintah persetujuan:
+```text
+amca> synthesize
+```
+*(Atau klik tombol **Setujui & Sintesis Komponen Baru** di GUI).*
+- **Hasil yang Wajib Terverifikasi**:
+  - Code Agent AMCA menyusun kode Python lengkap untuk `line_counter`.
+  - Kode diaudit oleh Gerbang Keamanan AST statis (`PASSED`).
+  - Kode dibungkus dengan *runtime Hoare guards* dan diuji di sandbox (`PASSED`).
+  - Komponen diikat ke `src/amca_components/custom/line_counter.py` dan `catalog.json`.
+  - Draf YAML divalidasi ulang: status beralih menjadi `verified` dan Sertifikat Bukti Formal menjadi **`PROVED`**!
+
+### Langkah 5 — Mengunci dan Mengonstruksi Paket ZIP Mandiri
+Lanjutkan dengan alur standar:
+```text
+amca> approve-spec
+amca> plan
+amca> approve-construction
+amca> construct
+```
+- **Hasil yang Wajib Terverifikasi**:
+  - Proyek Python mandiri selesai dibangun di `artifacts/constructed_projects/`.
+  - Verifikasi Stage 3 ($G_{\text{code}} \cong G_{\text{yaml}}$) berstatus **`PROVED`**.
+  - Berkas `pipeline.py` memanggil `from amca_components import run_input_source, run_line_counter, run_generate_report`.
+  - Arsip Handover ZIP berhasil dibuat dan siap diunduh!
+
 
 
