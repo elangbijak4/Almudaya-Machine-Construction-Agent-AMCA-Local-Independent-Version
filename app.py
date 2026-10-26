@@ -282,12 +282,12 @@ with st.sidebar:
     # =========================================================================
     # Kategori 2: Cloud API Langsung (Google Gemini, OpenAI, Anthropic, xAI Grok, Custom)
     # =========================================================================
-    elif provider in {"Google Gemini", "xAI (Grok)", "OpenAI", "Anthropic", "Custom OpenAI-Compatible"}:
+    elif provider in {"Gemini", "Google Gemini", "xAI (Grok)", "OpenAI", "Anthropic", "Custom OpenAI-Compatible"}:
         st.caption(f"☁️ *Koneksi langsung ke Cloud API {provider}*")
         if provider == "Custom OpenAI-Compatible":
             base_url = st.text_input("Endpoint Base URL", value=base_url_default or "http://127.0.0.1:8000/v1", key="url_custom")
 
-        if provider == "Google Gemini":
+        if provider in {"Gemini", "Google Gemini"}:
             gemini_recommendations = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro"]
             model = st.selectbox("Pilih Model Gemini", gemini_recommendations, index=0, key="model_gemini_select")
         else:
